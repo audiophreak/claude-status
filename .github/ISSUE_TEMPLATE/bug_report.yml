@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in Claude Status does not work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not paste prompts, transcripts, settings files, tokens or session IDs.**
+        Security problems: use *Security → Report a vulnerability* instead of an issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Start a CLI session in a project\n2. Submit a prompt that needs approval\n3. ..."
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Claude interface
+      options: [Claude Desktop (Code tab), Claude Code CLI (interactive), Claude Code CLI (claude -p), Other]
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Claude Status, macOS, Claude Code (`claude --version`), Claude Desktop
+      placeholder: "Claude Status 1.0.0, macOS 15.2, Claude Code 2.1.x, Claude Desktop 1.x"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed from
+      options: [Release download, Built from source (scripts/install.sh)]
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: Diagnostics
+      description: Output of `"~/Library/Application Support/ClaudeStatus/bin/claude-status-ctl" diagnose`. Review it before posting; it contains no prompts or tokens but does include paths.
+      render: text

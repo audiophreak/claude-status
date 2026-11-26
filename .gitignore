@@ -1,0 +1,33 @@
+# Build output and release assets
+.build/
+.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+Package.resolved
+*.zip
+*.dmg
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Never commit runtime state, settings backups, logs, credentials or local Claude config
+*.bak
+*.log
+backups/
+sessions/
+logs/
+install-manifest.json
+.env
+.env.*
+*.pem
+*.p12
+*.cer
+*.mobileprovision
+.claude/settings.local.json
+.claude/worktrees/

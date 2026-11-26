@@ -1,0 +1,13 @@
+{
+  "theme": "dark",
+  "env": {
+    "EXAMPLE_FLAG": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)"
+    ],
+    "deny": []
+  },
+  "model": "opus"
+}

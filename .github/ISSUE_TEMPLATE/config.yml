@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/audiophreak/claude-status/security/advisories/new
+    about: Please report security issues privately.
+  - name: Claude Code documentation
+    url: https://code.claude.com/docs/en/hooks
+    about: Questions about Claude Code itself belong with Anthropic's documentation and support.

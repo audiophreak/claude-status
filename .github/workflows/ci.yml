@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: read-only token for every job.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and test (macOS, Apple silicon)
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Release bundle (arm64, ad-hoc signed)
+        run: scripts/build.sh
+
+      - name: Hook, settings-preservation and app integration tests
+        run: scripts/integration-test.sh
+
+      - name: Installer / update / uninstall round trip (isolated HOME)
+        run: scripts/installer-roundtrip-test.sh
+
+      - name: Release packaging dry run
+        run: scripts/package-release.sh
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: shellcheck
+        run: shellcheck -x -P SCRIPTDIR -S warning scripts/*.sh
+
+      - name: Python syntax (acceptance driver)
+        run: python3 -m py_compile scripts/acceptance/*.py
+
+      - name: JSON fixtures are valid
+        run: for f in Tests/Fixtures/settings/*.json; do case "$f" in *invalid-json*) continue;; esac; python3 -m json.tool "$f" > /dev/null; done
+
+  secret-scan:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks (pinned version, checksum verified)
+        run: |
+          curl -fsSLo gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gitleaks" && tar -xzf gitleaks.tgz -C "$RUNNER_TEMP/gitleaks" gitleaks && rm gitleaks.tgz
+
+      - name: Scan git history and working tree
+        run: |
+          "$RUNNER_TEMP/gitleaks/gitleaks" git --log-opts="--all" --redact --no-banner .
+          "$RUNNER_TEMP/gitleaks/gitleaks" dir --redact --no-banner .

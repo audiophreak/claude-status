@@ -1,0 +1,69 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(~/Developer/**)"
+    ],
+    "defaultMode": "auto"
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/notify-when-attention-needed"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/pkill -u \"$USER\" -f 'caffeinate -i -t 3600' || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/log-turn-finished",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/caffeinate -i -t 3600 </dev/null >/dev/null 2>&1 &",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/audit-bash"
+          }
+        ]
+      }
+    ]
+  },
+  "modelSettings": {
+    "ratio": 1.50,
+    "exp": 1e-7
+  },
+  "enabledPlugins": {}
+}
