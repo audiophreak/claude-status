@@ -4,7 +4,7 @@
 `~/.claude/settings.json` or the installed state; destructive and negative cases use unique
 temporary directories.
 
-## Unit tests (`swift test`, 105 tests)
+## Unit tests (`swift test`, 106 tests)
 
 | Suite | Covers |
 |---|---|
@@ -57,13 +57,13 @@ default`) and records the states Claude Status observes. See the results table b
 Desktop acceptance used this project's own Desktop Code session (started before installation
 and picked up live) and an isolated one-reply Desktop Code session.
 
-## Results — v1.0.1 (2026-11-26, macOS 27.2, Claude Code CLI 2.1.325, Claude Desktop with bundled Claude Code 2.1.330)
+## Results — v1.0.1 / v1.0.2 (2026-11-26, macOS 27.2, Claude Code CLI 2.1.325, Claude Desktop with bundled Claude Code 2.1.330)
 
 ### Automated
 
 | Suite | Result |
 |---|---|
-| Unit (`swift test`) | 105 / 105 passed |
+| Unit (`swift test`) | 106 / 106 passed (1.0.2) |
 | Integration (`scripts/integration-test.sh`) | 65 / 65 passed (adds real-hook + real-app background scenarios and unobserved-session discovery) |
 | Installer round trip (`scripts/installer-roundtrip-test.sh`) | 24 / 24 passed |
 | `claude-status-ctl selftest` against the installed hook | 8 / 8 passed |
@@ -94,6 +94,7 @@ evidence lines are shown as recorded (type and status only).
 | Cancellation: `sleep 600` in background, then stopped with TaskStop | `Stop bg=1` → `UserPromptSubmit`, `PreToolUse`/`PostToolUse`, `Stop bg=0` | Working — Background → Working → Complete |
 | Concurrent with the CLI test below | both sessions `bg=1` at the same time | both Working — Background, tracked separately |
 | Running sessions with no event since the app started (incl. the defect's session) | none | **Unknown — Not observed**, coverage "3 of 5 running sessions observed" |
+| The defect's own session, still waiting on its background command (observed passively, never prompted) | its first event after installing 1.0.1: `SubagentStop … bg=1(shell:running)` | 1.0.1: correlated (coverage 4 of 5) but Unknown; **1.0.2: Working — Background · foreground not yet observed** |
 
 ### Real Claude Code CLI (`scripts/acceptance/cli_acceptance.py`, 16 / 16 passed, 1 skipped)
 

@@ -4,6 +4,14 @@ All notable changes are documented here. The format follows [Keep a Changelog](h
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-11-26
+
+### Fixed
+- A session whose foreground turn has not been observed yet (for example, first seen through a
+  `SubagentStop` while it waits for a background command) is shown as **Working — Background**
+  when Claude Code reports running background tasks, instead of plain Unknown. Found while
+  verifying 1.0.1 against the session that showed the original defect.
+
 ## [1.0.1] — 2026-11-26
 
 Correctness fix: a session whose response had finished while background work was still running

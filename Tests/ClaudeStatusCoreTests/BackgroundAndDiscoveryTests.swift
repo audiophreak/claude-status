@@ -175,6 +175,22 @@ final class BackgroundAndDiscoveryTests: TempDirTestCase {
         XCTAssertEqual(r.background, [])
     }
 
+    func testUnobservedForegroundWithReportedBackgroundWorkIsWorkingBackground() {
+        // Live case: a session observed first through a SubagentStop that reports a running
+        // background shell (its foreground turn ended before Claude Status saw it).
+        let r = apply([stop(100, [shellA], agentId: "a1", name: .subagentStop)])
+        XCTAssertEqual(r.state, .unknown)
+        let v = view(r)
+        XCTAssertEqual(v.state, .working)
+        XCTAssertEqual(v.activity, .background)
+        XCTAssertEqual(v.confidence, .partial)
+        XCTAssertEqual(v.label, "Working — Background")
+        XCTAssertTrue(v.detail.hasSuffix("foreground not yet observed"))
+        XCTAssertEqual(view(r, now: 100 + 9 * 3600).state, .unknown, "still subject to the 8 h limit")
+        XCTAssertEqual(view(apply([stop(100, [], agentId: "a1", name: .subagentStop)])).state, .unknown,
+                       "no background work and no foreground evidence stays Unknown")
+    }
+
     // MARK: Scheduled wakeups (session_crons)
 
     func testOneShotWakeupIsPendingContinuationRecurringIsInformational() {

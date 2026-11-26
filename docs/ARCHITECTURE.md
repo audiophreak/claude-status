@@ -122,6 +122,7 @@ deliberately not used for background work.
 | Complete | not reported | **Unknown** — "background work not reported by Claude Code" |
 | Working after a pending report | — | **Working — Continuing** |
 | Waiting / Error | any | Waiting / Error (detail adds background count) |
+| Unknown (not yet observed) | ≥ 1 running task | **Working — Background** (confidence partial) |
 | *(running process, no event yet)* | — | **Unknown — Not observed** |
 
 Then time and liveness:

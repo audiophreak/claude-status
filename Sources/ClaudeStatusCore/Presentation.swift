@@ -191,10 +191,27 @@ public enum Presentation {
             }
         case .waiting, .error:
             if let bg, !bg.isEmpty { e.detail += " · \(bg.count) background task\(bg.count == 1 ? "" : "s")" }
-        case .idle, .unknown:
+        case .unknown:
+            // Foreground never observed (e.g. first event was a SubagentStop), but Claude Code
+            // reported running background work: the session is demonstrably working.
+            if let bg, !bg.isEmpty {
+                e.state = .working
+                e.activity = .background
+                e.confidence = .partial
+                e.detail = "\(bg.count) background task\(bg.count == 1 ? "" : "s") running (\(typeSummary(bg))) · foreground not yet observed"
+                if silence > policy.staleAfterBackgroundSeconds {
+                    e.state = .unknown
+                    e.activity = .none
+                    e.stale = true
+                    e.confidence = .unknown
+                    e.detail = "Background work not confirmed for \(Format.duration(silence))"
+                }
+            } else {
+                e.confidence = .unknown
+            }
+        case .idle:
             break
         }
-        if r.state == .unknown { e.confidence = .unknown }
     }
 
     static func typeSummary(_ tasks: [BackgroundTaskInfo]) -> String {
