@@ -4,6 +4,45 @@ All notable changes are documented here. The format follows [Keep a Changelog](h
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-11-26
+
+Correctness fix: a session whose response had finished while background work was still running
+was shown as **Complete**, and a running session that had not sent an event since Claude Status
+started watching it was not shown at all ("No active sessions").
+
+### Fixed
+- A `Stop` no longer marks a session Complete while Claude Code reports running background work
+  (the documented `background_tasks` array on `Stop` / `SubagentStop`). Such sessions show
+  **Working — Background** with the number and type of tasks, and the menu bar stays Working.
+- Claude resuming on its own after background work (observed as `UserPromptSubmit` or tool
+  activity without a typed prompt) shows **Working — Continuing**. Complete requires a `Stop`
+  that reports no running background work.
+- A `Stop` without a background report is shown as **Unknown**, never assumed complete.
+- Running Claude Code sessions without any event are listed as **Unknown — Not observed** and
+  count towards the aggregate, instead of only being mentioned as a number under health.
+- **Clear Finished** and retention hide, rather than delete, finished sessions whose Claude
+  process is still running, so they never become untracked. Background, waiting and unknown
+  sessions are never removed.
+- Monitoring health no longer says "Monitoring active" when running sessions are not observed.
+
+### Added
+- Separate foreground and background lines in the dashboard; **Working — Continuation
+  scheduled** for one-shot scheduled wakeups (`session_crons`); hourglass menu bar symbol when
+  only background work is running.
+- Health shows coverage ("3 of 4 running sessions observed"), whether hooks are executing
+  (last run, recent rejected events), and whether Claude Code reports background tasks.
+- `claude-status-ctl diagnose` prints coverage and the PID → session mapping;
+  `claude-status-ctl selftest` runs the installed hook against an isolated store and checks
+  ingestion and state derivation; `list` shows unobserved sessions and the two dimensions.
+- The hook log records background-task counts, types and statuses for `Stop` / `SubagentStop`
+  (never descriptions or commands).
+
+### Changed
+- Stored per session in addition: in-flight background tasks (opaque id, type label, status)
+  and scheduled-wakeup counts. Records written by 1.0.0 remain readable; a session that 1.0.0
+  last recorded as Complete shows Unknown until its next turn, because 1.0.0 did not keep the
+  background report.
+
 ## [1.0.0] — 2026-11-26
 
 First public release.

@@ -15,9 +15,11 @@ commands:
   install-helpers    --from DIR: copy claude-status-hook/ctl from DIR to the stable bin directory
   verify-preserved   --backup FILE: confirm everything except Claude Status hooks matches FILE
   restore-backup     --backup FILE: restore FILE only if nothing else changed since it was taken
-  diagnose           Print monitoring health (add --json for machine-readable output)
-  list               List tracked sessions
-  clear-finished     Remove non-active session records
+  diagnose           Print monitoring health, coverage and process correlation (--json)
+  selftest           Run the hook executable against an isolated temporary store and check
+                     ingestion and state derivation (foreground, background, completion)
+  list               List tracked and detected-but-unobserved sessions
+  clear-finished     Remove finished sessions (hidden while their process still runs)
   purge-state        --yes: delete session records and logs (keeps settings backups unless --include-backups)
 
 options:
@@ -172,19 +174,32 @@ case "restore-backup":
 case "diagnose":
     let store = SessionStore(paths: paths)
     let (records, corrupt) = store.loadAll()
-    let h = MonitoringHealth.check(paths: paths, settingsURL: settingsURL, records: records, corrupt: corrupt.count)
+    let procs = ProcessInspector.detectSessions(now: now)
+    let h = MonitoringHealth.check(paths: paths, settingsURL: settingsURL, records: records, corrupt: corrupt.count, processes: procs)
     let appRunning = !NSRunningApplicationList.running().isEmpty
+    let unobserved = Presentation.unobservedProcesses(procs, records: records)
+    let liveRecords = records.filter { !$0.ended }
+    func mapping(_ p: DetectedProcess) -> String {
+        if let r = liveRecords.first(where: { $0.pid == p.pid }) { return String(r.sessionId.prefix(8)) }
+        return unobserved.contains(p) ? "UNOBSERVED" : "matched-by-cwd"
+    }
     if flag("--json") {
         let obj: [String: Any] = [
             "version": ClaudeStatusVersion.current,
             "level": h.level.rawValue,
             "hooks": h.hookStatus.kind.rawValue,
             "hookExecutablePresent": h.hookExecutablePresent,
+            "hookLastRanAt": h.hookLastRanAt ?? NSNull(),
+            "recentHookFailures": h.recentHookFailures,
             "storeAccessible": h.storeAccessible,
             "lastEventAt": h.lastEventAt ?? NSNull(),
             "sessions": records.count,
             "corruptRecords": corrupt.count,
+            "runningClaudeProcesses": h.runningClaudeProcesses ?? NSNull(),
             "unobservedClaudeProcesses": h.unobservedClaudeProcesses,
+            "coverageComplete": h.coverageComplete,
+            "backgroundVisibility": h.backgroundVisibility.rawValue,
+            "processes": procs.map { ["pid": Int($0.pid), "client": $0.client.rawValue, "session": mapping($0)] as [String: Any] },
             "appRunning": appRunning,
             "problems": h.problems,
         ]
@@ -193,42 +208,55 @@ case "diagnose":
     } else {
         print("Claude Status \(ClaudeStatusVersion.current) diagnostics")
         print("  health:            \(h.level.rawValue.uppercased()) — \(h.summary)")
+        print("  menu bar app:      \(appRunning ? "running" : "not running")")
         print("  settings:          \(settingsURL.path)")
         print("  \(describe(h.hookStatus))")
         print("  hook executable:   \(paths.hookExecutable.path) [\(h.hookExecutablePresent ? "present" : "MISSING")]")
+        print("  hooks executing:   \(h.hookLastRanAt.map { "last run \(Format.ago(now - $0))" } ?? "no run recorded")\(h.recentHookFailures > 0 ? ", \(h.recentHookFailures) recent failure(s)" : ", no recent failures")")
         print("  state directory:   \(paths.sessionsDir.path) [\(h.storeAccessible ? "accessible" : "NOT ACCESSIBLE")]")
         print("  last valid event:  \(h.lastEventAt.map { Format.ago(now - $0) } ?? "none yet")")
         print("  tracked sessions:  \(records.count)\(corrupt.isEmpty ? "" : " (\(corrupt.count) unreadable ignored)")")
-        print("  unobserved claude processes: \(h.unobservedClaudeProcesses) (sessions that have not fired a hook since installation)")
-        print("  menu bar app:      \(appRunning ? "running" : "not running")")
+        print("  coverage:          \(h.coverageText)")
+        print("  background tasks:  \(h.backgroundVisibilityText)")
+        for p in procs {
+            print("    pid \(p.pid)  \(p.client.label.padding(toLength: 7, withPad: " ", startingAt: 0))  session \(mapping(p))")
+        }
         for p in h.problems { print("  problem: \(p)") }
+        if !unobserved.isEmpty {
+            print("  note: an unobserved session is shown as Unknown until it fires its next hook event")
+            print("        (its next prompt, tool call or the end of its current turn). Claude Code reloads")
+            print("        hooks in running sessions, so no restart is needed.")
+        }
     }
     exit(h.level == .error ? 2 : 0)
 
+case "selftest":
+    exit(SelfTest.run(hook: URL(fileURLWithPath: hookPath)) ? 0 : 1)
+
 case "list":
     let (records, corrupt) = SessionStore(paths: paths).loadAll()
-    let sessions = Presentation.sorted(records.map { r in
-        Presentation.evaluate(r, now: now, alive: r.pid.map { ProcessInspector.isAlive(pid: $0, startTime: r.pidStartTime) }, lastWake: nil)
-    })
-    if sessions.isEmpty { print("No sessions tracked.") }
+    var sessions = records.map { r in
+        Presentation.evaluate(r, now: now, alive: SessionMaintenance.liveness(r), lastWake: nil)
+    }
+    let unobserved = Presentation.unobservedProcesses(ProcessInspector.detectSessions(now: now), records: records)
+    sessions += Presentation.unobservedSessions(unobserved, now: now) { ProjectInfo.detect(from: $0) }
+    sessions = Presentation.sorted(sessions)
+    if sessions.isEmpty { print("No sessions tracked or detected.") }
     for s in sessions {
         let wt = s.record.worktreeName.map { " [\($0)]" } ?? ""
-        print("\(s.record.sessionId.prefix(8))  \(s.state.label.padding(toLength: 8, withPad: " ", startingAt: 0))  \(s.record.client.label.padding(toLength: 7, withPad: " ", startingAt: 0))  \(s.record.displayName)\(wt) — \(s.detail) \(Presentation.timeText(s, now: now))")
+        let id = s.unobserved ? "pid \(s.record.pid ?? 0)" : String(s.record.sessionId.prefix(8))
+        let hidden = s.dismissed ? " (hidden)" : ""
+        print("\(id.padding(toLength: 9, withPad: " ", startingAt: 0)) \(s.label.padding(toLength: 24, withPad: " ", startingAt: 0)) \(s.record.client.label.padding(toLength: 7, withPad: " ", startingAt: 0)) \(s.record.displayName)\(wt)\(hidden) — \(s.detail) \(Presentation.timeText(s, now: now))")
+        if s.showsDimensions {
+            print("          foreground: \(s.foregroundSummary) · background: \(s.backgroundSummary)")
+        }
     }
     if !corrupt.isEmpty { print("(\(corrupt.count) unreadable record(s) ignored)") }
 
 case "clear-finished":
-    let store = SessionStore(paths: paths)
-    var removed = 0
-    try? store.withLock {
-        let (records, corrupt) = store.loadAll()
-        for r in records {
-            let e = Presentation.evaluate(r, now: now, alive: r.pid.map { ProcessInspector.isAlive(pid: $0, startTime: r.pidStartTime) }, lastWake: nil)
-            if Presentation.isRemovable(e, now: now, retention: nil) { try? store.delete(r.sessionId); removed += 1 }
-        }
-        for c in corrupt { store.deleteCorrupt(c) }
-    }
-    print("Removed \(removed) finished session record(s).")
+    let r = SessionMaintenance.cleanup(store: SessionStore(paths: paths), now: now, retention: nil,
+                                       alive: SessionMaintenance.liveness)
+    print("Removed \(r.deleted) finished session record(s); hid \(r.dismissed) finished session(s) whose Claude process is still running.")
 
 case "purge-state":
     guard flag("--yes") else { fail("purge-state deletes Claude Status history; pass --yes to confirm", code: 64) }

@@ -157,14 +157,19 @@ S="$WORK/diag-settings.json"; cp "$FIX/unrelated.json" "$S"
 check "missing hook executable detected (exit 2, reported)" bash -c "[ $rc = 2 ] && grep -q '\"hookExecutablePresent\" : false' '$WORK/diag.json'"
 mkdir -p "$DH/bin"; cp "$HOOK" "$DH/bin/claude-status-hook"
 "$CTL" diagnose --json --settings "$S" --home "$DH" > "$WORK/diag2.json"; rc=$?
-check "healthy after executable restored" bash -c "[ $rc = 0 ] && grep -q '\"level\" : \"ok\"' '$WORK/diag2.json'"
+# Real Claude sessions on this Mac are unobserved in this empty store: a coverage warning is the
+# only acceptable problem.
+check "healthy after executable restored (only coverage gaps reported)" python3 -c "
+import json,sys; d=json.load(open(sys.argv[1]))
+ok = d['level']=='ok' or (d['level']=='warning' and all(p.startswith('Monitoring incomplete') for p in d['problems']))
+sys.exit(0 if ok and $rc == 0 and d['hookExecutablePresent'] else 1)" "$WORK/diag2.json"
 
 echo "Menu bar application (isolated instance, own state root)"
 AH="$WORK/app"; mkdir -p "$AH/sessions"; chmod 700 "$AH" "$AH/sessions"
 DUMP="$AH/state-dump.json"
 # Pre-existing state: an old finished session (beyond retention) and an old active one.
 old=$(( $(date +%s) - 3 * 86400 ))
-hook "$AH" '{"session_id":"old-done","hook_event_name":"Stop"}'
+hook "$AH" '{"session_id":"old-done","hook_event_name":"Stop","background_tasks":[]}'
 hook "$AH" '{"session_id":"old-busy","hook_event_name":"PermissionRequest"}'
 for f in old-done old-busy; do
   python3 - "$AH/sessions/$f.json" "$old" <<'PY'
@@ -178,14 +183,18 @@ start_app() {
   APP_PIDS+=("$LAST_APP_PID")
   for _ in $(seq 1 40); do [[ -f "$DUMP" ]] && break; sleep 0.25; done
 }
-dump() { python3 -c "import json,sys; d=json.load(open('$DUMP')); print(eval(sys.argv[1]))" "$1" 2>/dev/null; }
+# Real Claude processes on this Mac appear as unobserved sessions in the isolated instance;
+# `S(d)` is the list of visible sessions that came from hook events. (When this test runs inside
+# a Claude Code session, the hook finds that live `claude` process as its ancestor, so retention
+# hides old finished records instead of deleting them.)
+dump() { python3 -c "import json,sys; d=json.load(open('$DUMP')); S=lambda d: [s for s in d['sessions'] if not s['unobserved'] and not s['dismissed']]; print(eval(sys.argv[1]))" "$1" 2>/dev/null; }
 wait_for() { # python-expr expected timeout_s
   local end=$(( $(date +%s) + ${3:-5} ))
   while (( $(date +%s) <= end )); do [[ "$(dump "$1")" == "$2" ]] && return 0; sleep 0.05; done; return 1
 }
 start_app
 check "app starts and publishes state" test -f "$DUMP"
-check "retention removed old finished session, kept old waiting one" wait_for "sorted(s['id'] for s in d['sessions'])" "['old-busy']" 5
+check "retention removed/hid old finished session, kept old waiting one" wait_for "sorted(s['id'] for s in S(d))" "['old-busy']" 5
 check "aggregate Waiting while a session awaits approval" wait_for "d['aggregate']" "waiting" 3
 hook "$AH" '{"session_id":"old-busy","hook_event_name":"PostToolUse"}'
 check "approval resolved -> Working" wait_for "d['aggregate']" "working" 3
@@ -216,17 +225,36 @@ sys.exit(0 if res[-1] < 1.0 else 1)
 PY
 e2e_rc=$?
 check "event-to-indicator latency < 1 s ($(cat "$WORK/e2e.txt"))" test $e2e_rc = 0
-for i in 0 1 2 3 4 5 6 7 8 9; do hook "$AH" "{\"session_id\":\"lat-$i\",\"hook_event_name\":\"Stop\"}"; done
+for i in 0 1 2 3 4 5 6 7 8 9; do hook "$AH" "{\"session_id\":\"lat-$i\",\"hook_event_name\":\"Stop\",\"background_tasks\":[]}"; done
 hook "$AH" '{"session_id":"multi-a","hook_event_name":"UserPromptSubmit"}'
 hook "$AH" '{"session_id":"multi-b","hook_event_name":"StopFailure","error":"rate_limit"}'
-check "concurrent sessions: each listed individually" wait_for "len(d['sessions'])" "13" 3
+check "concurrent sessions: each listed individually" wait_for "len(S(d))" "13" 3
 check "aggregate precedence: Error over Working" wait_for "d['aggregate']" "error" 3
 check "working count preserved alongside error" wait_for "d['working']" "2" 3
 # Restart recovery.
 kill "$LAST_APP_PID"; wait "$LAST_APP_PID" 2>/dev/null; rm -f "$DUMP"
 hook "$AH" '{"session_id":"multi-b","hook_event_name":"UserPromptSubmit"}'   # event while app is down
 start_app
-check "restart: state recovered incl. events received while app was down" wait_for "(d['aggregate'], d['working'], len(d['sessions']))" "('working', 3, 13)" 5
+check "restart: state recovered incl. events received while app was down" wait_for "(d['aggregate'], d['working'], len(S(d)))" "('working', 3, 13)" 5
+# Background work (documented background_tasks on Stop) through the real hook and app.
+lbl() { echo "[s['label'] for s in d['sessions'] if s['id']=='$1'][0]"; }
+hook "$AH" '{"session_id":"bg-1","hook_event_name":"UserPromptSubmit","prompt":"x"}'
+hook "$AH" '{"session_id":"bg-1","hook_event_name":"Stop","background_tasks":[{"id":"t1","type":"shell","status":"running","command":"sleep 40"}],"session_crons":[]}'
+check "Stop with a running background task -> Working — Background" wait_for "$(lbl bg-1)" "Working — Background" 3
+check "background work counts as working in the aggregate" wait_for "d['background'] >= 1" "True" 3
+hook "$AH" '{"session_id":"bg-1","hook_event_name":"UserPromptSubmit","prompt":"<task notification>"}'
+check "automatic continuation -> Working" wait_for "$(lbl bg-1)" "Working" 3
+hook "$AH" '{"session_id":"bg-1","hook_event_name":"Stop","background_tasks":[],"session_crons":[]}'
+check "all work finished -> Complete" wait_for "$(lbl bg-1)" "Complete" 3
+hook "$AH" '{"session_id":"bg-2","hook_event_name":"Stop"}'
+check "Stop without background report -> Unknown, not Complete" wait_for "$(lbl bg-2)" "Unknown" 3
+check "record holds no command text" bash -c "! grep -q 'sleep 40' '$AH/sessions/bg-1.json'"
+# Existing sessions: Claude processes running on this Mac are listed as unobserved (Unknown).
+if pgrep -x claude >/dev/null 2>&1; then
+  check "running Claude sessions without events are shown as unobserved, never omitted" wait_for "d['unobserved'] > 0 and d['aggregate'] != 'idle'" "True" 40
+else
+  echo "  SKIP  unobserved-session discovery (no Claude Code process running on this machine)"
+fi
 # Missing hook executable is surfaced by the app's health model (isolated root has none).
 check "app health reports missing hook executable" wait_for "d['hookExecutablePresent']" "False" 3
 # Ingestion recovery: sessions directory removed and recreated.

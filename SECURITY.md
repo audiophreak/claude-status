@@ -37,10 +37,19 @@ decision, add context, or make Claude continue.
 
 Stored per session: identifiers, timestamps, state, working directory, project / git
 repository / worktree name, client type, Claude PID and start time, opaque in-flight
-tool-use IDs, counts, and the documented enum values listed in `docs/ARCHITECTURE.md`.
-Never stored: prompts, responses, tool names, tool inputs or outputs, transcript paths,
-session titles, error details, credentials or any other Claude configuration. The hook log
-contains event names, 8-character session-ID prefixes, results and timings only.
+tool-use IDs, counts, in-flight background tasks (opaque task ID, type label such as `shell`,
+and status only), scheduled-wakeup counts, and the documented enum values listed in
+`docs/ARCHITECTURE.md`. Never stored: prompts, responses, tool names, tool inputs or outputs,
+background-task descriptions or command lines, scheduled-task prompts, transcript paths,
+session titles, error details, credentials or any other Claude configuration.
+
+To list running sessions that have not sent an event, the app reads, for same-user processes
+named `claude`, the executable path, parent processes, start time and working directory through
+libproc. This is held in memory only, never written to disk, and no other process data (such as
+arguments or environment) is read. Claude Code's own files (transcripts, `~/.claude/sessions`)
+are not read. The hook log
+contains event names, 8-character session-ID prefixes, results, timings and, for `Stop` /
+`SubagentStop`, background-task counts with type labels and statuses only.
 
 ## Filesystem safety
 

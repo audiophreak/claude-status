@@ -85,4 +85,44 @@ public enum ProcessInspector {
         }
         return out
     }
+
+    /// Current working directory of a same-user process (libproc; no special permission).
+    public static func workingDirectory(_ pid: Int32) -> String? {
+        var vpi = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vpi, size) == size else { return nil }
+        var pathTuple = vpi.pvi_cdir.vip_path
+        let cap = MemoryLayout.size(ofValue: pathTuple)
+        let path = withUnsafePointer(to: &pathTuple) { p -> String in
+            p.withMemoryRebound(to: CChar.self, capacity: cap) { String(cString: $0) }
+        }
+        return Validate.absolutePath(path) ? path : nil
+    }
+
+    /// Desktop runs its own Claude Code build from its Application Support folder, launched
+    /// through a helper inside Claude.app. Everything else is treated as the CLI.
+    public static func classify(executable: String?, ancestorExecutables: [String]) -> ClientType {
+        if let e = executable, e.contains("/Application Support/Claude/claude-code/") { return .desktop }
+        if ancestorExecutables.contains(where: { $0.contains("/Claude.app/Contents/") }) { return .desktop }
+        return .cli
+    }
+
+    /// Running Claude Code processes with client type and working directory, for discovery of
+    /// sessions that have not delivered a hook event. Processes younger than `minAge` seconds
+    /// are skipped: their SessionStart hook is normally still in progress.
+    public static func detectSessions(now: Double = Date().timeIntervalSince1970, minAge: Double = 5) -> [DetectedProcess] {
+        claudeProcesses().compactMap { i in
+            guard now - i.startTime >= minAge else { return nil }
+            var ancestors: [String] = []
+            var pid = i.ppid
+            for _ in 0..<3 where pid > 1 {
+                guard let a = info(pid) else { break }
+                if let p = executablePath(pid) { ancestors.append(p) }
+                pid = a.ppid
+            }
+            return DetectedProcess(pid: i.pid, startTime: i.startTime,
+                                   client: classify(executable: executablePath(i.pid), ancestorExecutables: ancestors),
+                                   cwd: workingDirectory(i.pid))
+        }
+    }
 }

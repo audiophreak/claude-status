@@ -5,8 +5,9 @@
 When you run several Claude Code sessions at once (in the Claude desktop app's Code tab, in
 terminals, across projects and worktrees), it is easy to miss the one that has been waiting
 for your approval for ten minutes, or to keep checking a window that finished long ago.
-Claude Status puts one small indicator in the menu bar: **working**, **waiting for you**,
-**complete** or **failed**, with a dashboard of every session one click away.
+Claude Status puts one small indicator in the menu bar: **working** (including background
+work Claude is still waiting on), **waiting for you**, **complete**, **failed** or **unknown**,
+with a dashboard of every session one click away.
 
 > Claude Status is an independent, unofficial open-source project. It is not affiliated with,
 > sponsored by or endorsed by Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
@@ -14,12 +15,12 @@ Claude Status puts one small indicator in the menu bar: **working**, **waiting f
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
-    <img src="docs/images/dashboard-light.png" width="380" alt="Claude Status dashboard listing five sessions: one waiting for approval, one with an API error, two working and one complete">
+    <img src="docs/images/dashboard-light.png" width="380" alt="Claude Status dashboard listing seven sessions: waiting for approval, API error, two working, one working in the background, one not yet observed and one complete, with monitoring coverage">
   </picture>
   &nbsp;&nbsp;
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/menubar-dark.png">
-    <img src="docs/images/menubar-light.png" width="420" alt="The menu bar indicator in each state: Waiting, Error, Working, Unknown, Complete and Idle">
+    <img src="docs/images/menubar-light.png" width="420" alt="The menu bar indicator in each state: Waiting, Error, Working, Working in the background, Unknown, Complete and Idle">
   </picture>
 </p>
 
@@ -32,11 +33,16 @@ Claude Status puts one small indicator in the menu bar: **working**, **waiting f
 - **Session dashboard:** project (and git worktree), client (Desktop / CLI), state and reason
   ("Approval required", "API error: rate_limit", "2 subagents"…), live turn timer or time since
   completion with turn duration, and monitoring health.
-- **Honest states.** A session is only *Complete* after Claude Code reports that the turn
-  finished. Long silences become *Unknown*, never *Complete*. Subagents never mark their parent
-  complete.
+- **Honest states.** A session is only *Complete* when Claude Code reports that the response
+  finished **and** that no background work (background commands, subagents, monitors,
+  scheduled wakeups) is still running. While background work runs the session stays
+  *Working — Background*, and when Claude resumes on its own it shows *Working — Continuing*.
+  Long silences become *Unknown*, never *Complete*.
+- **Nothing hidden.** Claude Code sessions that are running but have not sent an event yet
+  (for example, started before installation and idle since) are listed as *Unknown — Not
+  observed*, and health shows coverage ("3 of 4 running sessions observed").
 - **Optional notifications** for completion, approval requests and errors. All are off by default.
-- **Native and light:** Swift/SwiftUI, Apple silicon, about 2 MB, idle CPU ≈0.06 %, about 19 MB of
+- **Native and light:** Swift/SwiftUI, Apple silicon, under 3 MB, idle CPU ≈0.03 %, about 19 MB of
   memory. No Electron, Node, Docker, network access, telemetry or listening ports.
 - **Safe integration:** uses Claude Code's documented [hooks](https://code.claude.com/docs/en/hooks).
   The hook always exits successfully and prints nothing, so it can never block or change a
@@ -53,9 +59,10 @@ Claude Status puts one small indicator in the menu bar: **working**, **waiting f
 
 | Interface | Status | Evidence |
 |---|---|---|
-| **Claude Desktop — Code tab** (local sessions) | ✅ Verified | Real sessions: prompt → Working → Complete; permission request → Waiting → Working → Complete; sessions already running before installation picked up automatically |
-| **Claude Code CLI** (interactive and `claude -p`) | ✅ Verified | Scripted pty acceptance test: Working/Complete, permission Waiting and approval, `/exit`, SIGKILL → Unknown, API error → Error |
-| Several concurrent sessions (Desktop + CLI, many projects) | ✅ Verified | Tracked individually and aggregated |
+| **Claude Desktop — Code tab** (local sessions) | ✅ Verified (1.0.1) | Real sessions: prompt → Working → Complete; permission request → Waiting → Working → Complete; two background commands → *Working — Background* → automatic continuation → *Working — Background* (1 left) → failing command exits → continuation → Complete; background command stopped → Complete; running sessions without events listed as *Not observed* |
+| **Claude Code CLI** (interactive and `claude -p`) | ✅ Verified (1.0.1) | Scripted pty acceptance test: Working/Complete, permission Waiting and approval, background command → *Working — Background* → automatic continuation → Complete, `/exit`, SIGKILL → Unknown, API error → Error |
+| Several concurrent sessions (Desktop + CLI, many projects) | ✅ Verified | Tracked individually and aggregated, including Desktop and CLI background work at the same time |
+| Background subagents, monitors, scheduled wakeups | ⚠️ Unit-tested | Same documented `background_tasks` / `session_crons` fields; not separately exercised live |
 | Claude Desktop — Chat | ❌ Not supported | Chats do not run Claude Code or its hooks |
 | Cowork | ❌ Not supported | No documented hook integration |
 | Cloud, remote or SSH sessions | ❌ Not supported | Their hooks run on the other machine |
@@ -102,15 +109,20 @@ It needs no `sudo`.
 |---|---|---|---|
 | exclamation bubble | amber | **Waiting** | A session needs you: approval, a question, plan approval or an MCP input request |
 | ✕ in an octagon | red | **Error** | A turn ended with an API error, or a running tool was interrupted |
-| circular arrows | blue | **Working** | Claude is executing a turn |
-| ? in a circle | grey | **Unknown** | State can't be established (not yet observed, long silence, or the Claude process exited) |
-| check mark | green | **Complete** | The last turn finished; ready for your next prompt |
-| empty circle | grey | **Idle** | No active sessions |
+| circular arrows | blue | **Working** | Claude is executing a turn (*Continuing* when it resumed on its own after background work) |
+| hourglass | blue | **Working — Background** | Claude replied, but background commands, subagents or monitors it started are still running; it will continue when they finish |
+| clock | blue | **Working — Continuation scheduled** | Claude replied and scheduled a one-shot wakeup to continue |
+| ? in a circle | grey | **Unknown** | State can't be established: long silence, the Claude process exited, or Claude Code did not report background work |
+| eye with a slash | grey | **Unknown — Not observed** | A running Claude Code session that has not sent a hook event yet |
+| check mark | green | **Complete** | The response finished and no background work is running; ready for your next prompt |
+| empty circle | grey | **Idle** | No sessions running |
 
 The menu bar shows the most urgent state (Waiting › Error › Working › Unknown › Complete ›
 Idle). The number next to it is how many sessions are **working**. A `≥` before a timer means
-the turn started before Claude Status first saw it. **Clear Finished** removes completed,
-ended and failed sessions. Working and waiting sessions are never removed.
+the turn started before Claude Status first saw it. Rows of sessions with background work show
+the foreground and background separately. **Clear Finished** removes ended sessions and hides
+finished ones (they reappear on their next event). Working (including background), waiting
+and unknown sessions are never removed.
 
 **Preferences:** launch at login, working-session count, elapsed time in the menu bar,
 working directories in the list, how long finished sessions are kept (1 hour to 7 days),
@@ -130,8 +142,11 @@ flowchart LR
 Claude Code runs the hook for 12 events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`,
 `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `Stop`,
 `StopFailure`, `SubagentStart`, `SubagentStop`, `SessionEnd`). A deterministic state machine
-turns them into one small record per session, which the app watches. There is no daemon, no
-socket and no polling of Claude. Hooks keep working when the app isn't running, and the app
+turns them into one small record per session, which the app watches. Background work comes
+from the documented `background_tasks` and `session_crons` fields of `Stop` and `SubagentStop`.
+To list sessions that have not sent an event yet, the app also looks for running `claude`
+processes (path, start time and working directory only, via libproc). There is no daemon, no
+socket and no reading of Claude's files or transcripts. Hooks keep working when the app isn't running, and the app
 catches up when it starts. Design details, state diagram and edge cases:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -195,16 +210,26 @@ changes made after installation. Old backups are never restored over a newer fil
 | Symptom | Fix |
 |---|---|
 | Dashboard shows *Claude Status hooks are not installed* or *helper missing* | Click **Set Up Claude Code Hooks…** (or `scripts/install.sh`) |
-| A session doesn't appear | It hasn't fired a hook since setup. Send it a prompt. Interactive sessions in an untrusted folder hold back all hooks until you accept the trust dialog. |
+| A session shows *Unknown — Not observed* | It is running but hasn't fired a hook since Claude Status started watching (for example it is idle, or waiting on a background command). It updates on its next prompt, tool call or turn end; no restart is needed. Interactive sessions in an untrusted folder hold back all hooks until you accept the trust dialog. |
+| *Unknown — background work not reported* | The `Stop` event had no `background_tasks` field (older Claude Code, or an unusually large payload). Claude Status will not claim Complete; the next turn updates it. |
 | A session stays *Working* after you pressed Esc | Claude Code emits no hook for that (see below). The next prompt fixes it; otherwise it turns *Unknown* after 20 minutes. |
 | *Unknown — process exited* | The Claude process ended without a normal exit (crash or kill). Use **Clear Finished**. |
 | *Claude settings could not be parsed* | `settings.json` isn't valid JSON. Claude Status won't edit it until it is fixed. |
 | Custom `CLAUDE_CONFIG_DIR` | The menu bar app checks `~/.claude/settings.json` unless it was launched with that variable. Use `claude-status-ctl install-hooks --settings "$CLAUDE_CONFIG_DIR/settings.json"`. |
 
 Diagnostics: `"$HOME/Library/Application Support/ClaudeStatus/bin/claude-status-ctl" diagnose`
-(or `scripts/diagnose.sh` from a checkout).
+(health, coverage, PID → session mapping) and `… claude-status-ctl selftest` (runs the
+installed hook against a temporary store), or `scripts/diagnose.sh` from a checkout.
 
 ## Known limitations
+
+- **Background work is known only at turn boundaries.** Claude Code reports background tasks
+  when a response (or a subagent) finishes. No event fires while a background command runs or
+  at the moment it exits; the session updates when Claude resumes (a `UserPromptSubmit`) and
+  finishes that turn. If Claude Code never resumes, the session turns *Unknown* after 8 hours.
+  While a continuation turn runs, the background count shown is the last reported one.
+- **Sessions that are idle when Claude Status starts** show as *Unknown — Not observed* until
+  their next event. Their project and client come from the process, not from Claude Code.
 
 - **Pressing Esc while Claude is writing text** emits no hook event in Claude Code (verified:
   nothing for 80 s). The session shows *Working* until your next prompt, or *Unknown* after

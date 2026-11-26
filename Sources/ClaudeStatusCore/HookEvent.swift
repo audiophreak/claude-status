@@ -20,6 +20,38 @@ public enum HookEventName: String, Codable, CaseIterable, Sendable {
     public static let registered: [HookEventName] = HookEventName.allCases
 }
 
+/// One in-flight background task as reported by Claude Code in the documented
+/// `background_tasks` array of `Stop` / `SubagentStop` input. Only the opaque identifier,
+/// the task-type label and the status are kept: never the description or command.
+public struct BackgroundTaskInfo: Codable, Equatable, Sendable {
+    public var id: String
+    public var type: String
+    public var status: String
+
+    public init(id: String, type: String, status: String) {
+        self.id = id; self.type = type; self.status = status
+    }
+
+    /// Statuses that mean the task is no longer running. Anything else (including statuses
+    /// added by future Claude Code versions) is conservatively treated as still in flight.
+    public static let terminalStatuses: Set<String> = [
+        "completed", "complete", "done", "finished", "succeeded", "success",
+        "failed", "failure", "error", "errored", "killed", "cancelled", "canceled",
+        "stopped", "aborted", "timed_out", "timeout", "exited",
+    ]
+
+    public var isActive: Bool { !BackgroundTaskInfo.terminalStatuses.contains(status.lowercased()) }
+}
+
+/// Session-scoped scheduled wakeups (`session_crons`), counted only.
+public struct ScheduleCounts: Codable, Equatable, Sendable {
+    /// One-shot wakeups (`recurring: false`): Claude will continue on its own.
+    public var oneShot: Int
+    /// Recurring schedules: informational, they do not mean work is in progress.
+    public var recurring: Int
+    public init(oneShot: Int = 0, recurring: Int = 0) { self.oneShot = oneShot; self.recurring = recurring }
+}
+
 /// A validated, minimised lifecycle event. Contains only the fields Claude Status needs:
 /// no prompt text, tool input, tool output, transcript path or assistant messages.
 public struct HookEvent: Equatable, Sendable {
@@ -37,21 +69,29 @@ public struct HookEvent: Equatable, Sendable {
     public var errorCategory: String?     // StopFailure
     public var isInterrupt: Bool          // PostToolUseFailure
     public var stopHookActive: Bool       // Stop
-    public var backgroundTaskCount: Int?  // Stop
+    /// Documented `background_tasks` array (Stop, SubagentStop). nil = field absent, which
+    /// means Claude Code did not report background work (unknown, not "none").
+    public var backgroundTasks: [BackgroundTaskInfo]?
+    /// Documented `session_crons` array (Stop, SubagentStop). nil = field absent.
+    public var schedules: ScheduleCounts?
     public var promptId: String?
+
+    public var backgroundTaskCount: Int? { backgroundTasks?.count }
 
     public init(name: HookEventName?, rawName: String, sessionId: String, timestamp: Double,
                 cwd: String? = nil, agentId: String? = nil, toolName: String? = nil,
                 toolUseId: String? = nil, source: String? = nil, reason: String? = nil,
                 notificationType: String? = nil, errorCategory: String? = nil,
                 isInterrupt: Bool = false, stopHookActive: Bool = false,
-                backgroundTaskCount: Int? = nil, promptId: String? = nil) {
+                backgroundTasks: [BackgroundTaskInfo]? = nil, schedules: ScheduleCounts? = nil,
+                promptId: String? = nil) {
         self.name = name; self.rawName = rawName; self.sessionId = sessionId
         self.timestamp = timestamp; self.cwd = cwd; self.agentId = agentId
         self.toolName = toolName; self.toolUseId = toolUseId; self.source = source
         self.reason = reason; self.notificationType = notificationType
         self.errorCategory = errorCategory; self.isInterrupt = isInterrupt
-        self.stopHookActive = stopHookActive; self.backgroundTaskCount = backgroundTaskCount
+        self.stopHookActive = stopHookActive; self.backgroundTasks = backgroundTasks
+        self.schedules = schedules
         self.promptId = promptId
     }
 
@@ -86,6 +126,16 @@ public enum Validate {
         return s.utf8.allSatisfy { c in
             (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A)
                 || c == 0x2D || c == 0x5F || c == 0x2E || c == 0x3A
+        }
+    }
+
+    /// Short human label such as a task type (`shell`, `cloud session`, `MCP task`):
+    /// letters, digits, space and `_ - . :`.
+    public static func label(_ s: String, maxLength: Int = 40) -> Bool {
+        guard (1...maxLength).contains(s.utf8.count) else { return false }
+        return s.utf8.allSatisfy { c in
+            (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A)
+                || c == 0x20 || c == 0x2D || c == 0x5F || c == 0x2E || c == 0x3A
         }
     }
 
@@ -130,8 +180,15 @@ public enum HookEventParser {
         }
         var cwd: String? = nil
         if let c = d["cwd"] as? String, Validate.absolutePath(c) { cwd = c }
-        var bg: Int? = nil
-        if let arr = d["background_tasks"] as? [Any] { bg = min(arr.count, 1000) }
+        let bg = (d["background_tasks"] as? [Any]).map(parseBackgroundTasks)
+        var schedules: ScheduleCounts? = nil
+        if let arr = d["session_crons"] as? [Any] {
+            var c = ScheduleCounts()
+            for case let entry as [String: Any] in arr.prefix(1000) {
+                if (entry["recurring"] as? Bool) == false { c.oneShot += 1 } else { c.recurring += 1 }
+            }
+            schedules = c
+        }
         return HookEvent(
             name: HookEventName(rawValue: rawName),
             rawName: rawName,
@@ -147,9 +204,32 @@ public enum HookEventParser {
             errorCategory: str("error", max: 64),
             isInterrupt: (d["is_interrupt"] as? Bool) ?? false,
             stopHookActive: (d["stop_hook_active"] as? Bool) ?? false,
-            backgroundTaskCount: bg,
+            backgroundTasks: bg,
+            schedules: schedules,
             promptId: str("prompt_id")
         )
+    }
+
+    /// Maximum background tasks retained per session.
+    public static let maxBackgroundTasks = 64
+
+    /// Keep only `id`, `type` and `status` of each entry, validated. Descriptions and command
+    /// lines are never read into the result.
+    static func parseBackgroundTasks(_ arr: [Any]) -> [BackgroundTaskInfo] {
+        var out: [BackgroundTaskInfo] = []
+        for (i, any) in arr.prefix(1000).enumerated() {
+            guard out.count < maxBackgroundTasks else { break }
+            let entry = any as? [String: Any] ?? [:]
+            var id = "#\(i)"
+            if let v = entry["id"] as? String, Validate.token(v) { id = v }
+            else if let v = entry["id"] as? Int { id = String(v) }
+            var type = "task"
+            if let v = entry["type"] as? String, Validate.label(v) { type = v }
+            var status = "unknown"
+            if let v = entry["status"] as? String, Validate.token(v, maxLength: 40) { status = v }
+            out.append(BackgroundTaskInfo(id: id, type: type, status: status))
+        }
+        return out
     }
 
     /// Fallback for oversized payloads: extract top-level-looking scalar string fields from

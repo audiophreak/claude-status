@@ -6,6 +6,10 @@ public struct ProjectInfo: Equatable, Sendable {
     public var repoName: String
     public var worktreeName: String?
 
+    public init(repoRoot: String, repoName: String, worktreeName: String?) {
+        self.repoRoot = repoRoot; self.repoName = repoName; self.worktreeName = worktreeName
+    }
+
     /// Walk up from `path` (max 64 levels) looking for `.git`. A `.git` *file* indicates a
     /// linked worktree: `gitdir: <main>/.git/worktrees/<name>`. Reads at most 1 KiB.
     public static func detect(from path: String, fileManager fm: FileManager = .default) -> ProjectInfo? {

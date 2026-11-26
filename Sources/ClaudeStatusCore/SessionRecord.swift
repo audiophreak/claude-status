@@ -50,6 +50,7 @@ public enum StateReason: String, Codable, Sendable {
     case ended              // SessionEnd
     case observedMidTurn    // first event seen was mid-turn activity
     case continued          // activity after Stop (stop hook continuation)
+    case autoContinued      // activity after Stop while background work / a wakeup was pending
 }
 
 public enum ClientType: String, Codable, Sendable {
@@ -99,7 +100,18 @@ public struct SessionRecord: Codable, Equatable, Sendable {
 
     public var inFlightTools: [String]
     public var activeSubagents: Int
+    /// Number of in-flight background tasks at the last report (kept for compatibility).
     public var backgroundTasks: Int?
+    /// In-flight background tasks from the most recent documented `background_tasks` report.
+    /// nil = Claude Code has not reported background work for this session (unknown).
+    public var background: [BackgroundTaskInfo]?
+    /// When `background` was last reported.
+    public var backgroundReportedAt: Double?
+    /// Session-scoped scheduled wakeups at the last report. nil = not reported.
+    public var schedules: ScheduleCounts?
+    /// Hidden by "Clear Finished" while its Claude process is still running. Any new event
+    /// shows the session again. Keeping the record keeps the process correlated (observed).
+    public var dismissed: Bool?
     public var ended: Bool
     public var endReason: String?
     public var observedMidSession: Bool
@@ -123,6 +135,9 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.eventCount = 0
         self.ignoredOutOfOrder = 0
     }
+
+    /// Active background tasks, or nil when background work has not been reported.
+    public var activeBackground: [BackgroundTaskInfo]? { background?.filter(\.isActive) }
 
     /// Display name: git repository name, otherwise the project folder name.
     public var displayName: String {

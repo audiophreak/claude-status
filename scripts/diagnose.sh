@@ -18,5 +18,8 @@ echo
 echo "Recent hook log ($STATE_ROOT/logs/hook.log):"
 tail -n "${LINES_TO_SHOW:-10}" "$STATE_ROOT/logs/hook.log" 2>/dev/null | sed 's/^/  /' || echo "  (none)"
 echo
-echo "Sessions:"
+echo "Sessions (tracked and detected-but-unobserved):"
 ctl list | sed 's/^/  /'
+echo
+echo "End-to-end self-test of the installed hook (isolated temporary store):"
+"$CTL" selftest | sed 's/^/  /'

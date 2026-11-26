@@ -126,7 +126,7 @@ final class StoreAndRunnerTests: TempDirTestCase {
         // Records written by the hook are evaluated and selected for cleanup by the app logic.
         let store = SessionStore(paths: paths)
         for (sid, name) in [("done", "Stop"), ("busy", "UserPromptSubmit")] {
-            _ = HookRunner.process(payload: json(["session_id": sid, "hook_event_name": name]), truncated: false,
+            _ = HookRunner.process(payload: json(["session_id": sid, "hook_event_name": name, "background_tasks": []]), truncated: false,
                                    timestamp: 100, context: HookContext(), paths: paths)
         }
         let eff = store.loadAll().records.map { Presentation.evaluate($0, now: 100 + 90_000, alive: nil, lastWake: 100 + 89_000) }

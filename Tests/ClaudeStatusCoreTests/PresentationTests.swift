@@ -6,6 +6,12 @@ final class PresentationTests: XCTestCase {
         var r = SessionRecord(sessionId: id, timestamp: last)
         r.state = state
         r.lastEventAt = last
+        r.observedMidSession = false
+        if state == .complete {
+            // A completed turn whose Stop reported no background work.
+            r.background = []
+            r.backgroundReportedAt = last
+        }
         return r
     }
 

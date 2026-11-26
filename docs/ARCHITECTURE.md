@@ -41,9 +41,27 @@ flowchart LR
   `flock` (`sessions/.store.lock`, held ≈1–3 ms). Waiting is bounded to 1 s, after which the
   hook gives up silently (fail open).
 
-## Session state machine
+## Session state model
 
-The reducer `StateMachine.reduce(previous, event)` is pure and deterministic.
+Claude Status answers "is Claude still doing work?", not merely "has the last response
+finished?". Each session is described by independent dimensions, and the displayed status is
+derived from them:
+
+| Dimension | Source | Stored as |
+|---|---|---|
+| Identity and discovery | `session_id`; Claude PID + start time; running `claude` processes (libproc) | record file; in-memory process scan |
+| Foreground turn | `UserPromptSubmit` … `Stop` / `StopFailure` | `state` (Working, Waiting, Complete, Error, Idle, Unknown) |
+| Background work | documented `background_tasks` array on `Stop` and `SubagentStop` | `background` (id, type, status per task) |
+| Scheduled continuation | documented `session_crons` array on `Stop` and `SubagentStop` | `schedules` (one-shot / recurring counts) |
+| User attention | `PermissionRequest`, `Notification`, `AskUserQuestion` / `ExitPlanMode` | `state = waiting` + reason |
+| Terminal failure | `StopFailure`; `PostToolUseFailure` with `is_interrupt` | `state = error` + category |
+| Liveness | PID + start time (PID-reuse safe), `SessionEnd` | evaluated by the app |
+| Confidence | first event mid-session / mid-turn; unreported background; staleness | `EffectiveSession.confidence` |
+
+### Foreground reducer
+
+`StateMachine.reduce(previous, event)` is pure and deterministic. `state` is the foreground
+turn only.
 
 ```mermaid
 stateDiagram-v2
@@ -51,12 +69,12 @@ stateDiagram-v2
     [*] --> Idle: SessionStart (startup/resume/clear)
     Idle --> Working: UserPromptSubmit
     Unknown --> Working: UserPromptSubmit / main-thread tool activity
-    Complete --> Working: UserPromptSubmit
-    Complete --> Working: main-thread tool activity after Stop (Stop hook continued the turn)
+    Complete --> Working: UserPromptSubmit (typed prompt or automatic continuation)
+    Complete --> Working: main-thread tool activity after Stop (continuation)
     Error --> Working: UserPromptSubmit
     Working --> Waiting: PermissionRequest / Notification(permission_prompt, elicitation_*, agent_needs_input) / PreToolUse(AskUserQuestion, ExitPlanMode)
     Waiting --> Working: PostToolUse / PostToolUseFailure / PreToolUse / elicitation_complete
-    Working --> Complete: Stop (no agent_id)
+    Working --> Complete: Stop (no agent_id) = response finished
     Waiting --> Complete: Stop (e.g. permission denied, Claude finished)
     Working --> Error: StopFailure (API error) / PostToolUseFailure(is_interrupt)
     Working --> Waiting: Notification(idle_prompt) — turn ended without Stop
@@ -66,46 +84,125 @@ stateDiagram-v2
     Idle --> Idle: SessionStart(resume) re-opens an ended session
 ```
 
-Rules that keep the state honest:
+### Background work and automatic continuation
 
-| Situation | Handling |
-|---|---|
-| Subagents | Events with `agent_id` never complete the parent. `Stop`/`SubagentStop` from a subagent are activity only. Background-subagent activity after the main `Stop` keeps the session Complete. |
-| Stop semantics | `Stop` is treated as completion, but any later main-thread tool event re-opens the turn as Working ("Continuing"): this is exactly what happens when another Stop hook blocks the stop (`decision: "block"`). |
-| Tool failures | `PostToolUseFailure` keeps the turn Working (ordinary tool errors do not end a turn). Only `is_interrupt: true` from the main thread ends it as Error ("Interrupted"). |
-| Terminal failures | `StopFailure` → Error with the documented error category (`rate_limit`, `server_error`, …). |
-| Duplicates | Every transition is idempotent; repeating an event does not change the result. |
-| Out-of-order | Events older than the last applied event by up to 120 s (concurrent hook processes acquiring the lock in a different order) are ignored and counted. A larger gap is treated as a wall-clock change and accepted. |
-| Missing events | First event mid-turn → Working with "≥" elapsed time (turn start not observed). Never infers Complete without a `Stop`. |
-| Compaction | `SessionStart(source=compact)` mid-turn leaves the state unchanged. |
-| Resume | Any event after `SessionEnd` re-opens the session. |
+`Stop` means *the main agent finished responding*. It does **not** mean the session's work is
+done: Claude Code documents that the `background_tasks` and `session_crons` arrays on `Stop`
+"let hooks distinguish 'session is done' from 'session is paused waiting for background work
+to wake it back up'". Claude Status therefore:
 
-### Time-dependent presentation (app side, `Presentation.evaluate`)
+* keeps, per session, the in-flight tasks of the latest report (only `id`, `type` and
+  `status`; never `description` or `command`). Tasks whose status is terminal (`completed`,
+  `failed`, `killed`, `cancelled`, …) are dropped; unknown statuses count as running;
+* updates the report from `SubagentStop` too (its arrays are scoped to the parent session);
+* treats an absent array as **not reported** (unknown), never as "no background work";
+* keeps the report across new turns until the next `Stop` replaces it, and forgets it on
+  `SessionStart(startup|resume)` (new process) and `SessionEnd`;
+* marks main-thread activity after `Stop` as an automatic continuation (`autoContinued`) when
+  background work or a one-shot wakeup was pending, otherwise as a Stop-hook continuation.
+
+Observed on Claude Code 2.1.330 (Desktop) and the CLI: when a background shell command exits,
+Claude Code starts a new turn on its own **with a `UserPromptSubmit` event** (the hooks
+reference lists this for background subagents, scheduled tasks and messages), runs it, and
+fires `Stop` with the updated `background_tasks`. No event fires while the command runs. A
+command that fails or is stopped is reported the same way; its entry simply disappears from
+the next report.
+
+`TaskCreated` / `TaskCompleted` concern the task *list* (`TaskCreate` / `TaskUpdate`) and are
+deliberately not used for background work.
+
+### Derived status (`Presentation.evaluate`)
+
+| Foreground | Background report | Displayed |
+|---|---|---|
+| Working | any | **Working** (detail adds "· N background tasks") |
+| Complete | ≥ 1 running task | **Working — Background** |
+| Complete | none running, ≥ 1 one-shot wakeup | **Working — Continuation scheduled** |
+| Complete | none, no one-shot wakeup | **Complete** (recurring schedules are shown as detail) |
+| Complete | not reported | **Unknown** — "background work not reported by Claude Code" |
+| Working after a pending report | — | **Working — Continuing** |
+| Waiting / Error | any | Waiting / Error (detail adds background count) |
+| *(running process, no event yet)* | — | **Unknown — Not observed** |
+
+Then time and liveness:
 
 | Condition | Displayed |
 |---|---|
 | `SessionEnd` seen | Idle — "Session ended" (excluded from the aggregate) |
-| Recorded Claude process no longer alive (PID + start time, PID-reuse safe) while Working/Waiting | Unknown — "Claude process exited without ending the session" |
-| … while Complete/Error/Idle | treated as ended |
+| Recorded Claude process no longer alive (PID + start time) while Working, Waiting, Unknown or background work pending | Unknown — "process exited" |
+| … while the foreground finished and nothing was pending | treated as ended |
 | Working, no event for 20 min and no tool in flight | Unknown — "No activity for …" |
-| Working, no event for 120 min with a tool in flight (long builds/tests) | Unknown |
-| Waiting | never goes stale (a person may take any amount of time) |
+| Working, no event for 120 min with a tool in flight | Unknown |
+| Working — Background / Continuation scheduled, no event for 8 h | Unknown — "Background work not confirmed for …" |
+| Waiting | never goes stale |
 
 Silence before the most recent system wake is not counted. The app never shows Complete
 because events stopped.
 
+### Existing-session discovery
+
+Claude Code reloads hook settings in running sessions (verified for sessions started a day
+before installation), so no restart is ever needed; but a session that is idle or waiting on
+a background command fires no event until its next turn. The app therefore scans same-user
+processes named `claude` with libproc every 10–30 s (executable path, start time, working
+directory; nothing else) and matches them to records by PID and start time, or by working
+directory for records without a PID. A process with no matching record is listed as
+**Unknown — Not observed** with its folder name and client (Desktop when the executable lives
+in Claude's Application Support folder or an ancestor is inside `Claude.app`). It counts as
+Unknown in the aggregate and as a coverage gap in health, and becomes a normal row on its
+first hook event. Processes younger than 5 s are skipped while their `SessionStart` arrives.
+
+Claude Code also writes an undocumented per-process registry (`~/.claude/sessions/<pid>.json`)
+with the session ID and a busy/idle status. It is **not used**: it is undocumented, it holds
+session titles, and its status read `idle` for a session whose background command was still
+running, so it would not have prevented the defect.
+
+### Clear Finished and retention
+
+A finished session whose Claude process is still running is **hidden** (`dismissed`), not
+deleted, so its process stays correlated and never turns into an unobserved session; its next
+event shows it again. Ended sessions and sessions whose process exited are deleted. Working
+(including background), Waiting and undetermined sessions are never touched. Retention never
+deletes a record whose process is alive.
+
+### Other rules
+
+| Situation | Handling |
+|---|---|
+| Subagents | Events with `agent_id` never complete the parent. Background subagents appear in `background_tasks` as `subagent` tasks. |
+| Tool failures | `PostToolUseFailure` keeps the turn Working. Only `is_interrupt: true` from the main thread ends it as Error ("Interrupted"). |
+| Terminal failures | `StopFailure` → Error with the documented error category. |
+| Duplicates | Every transition is idempotent. |
+| Out-of-order | Events older than the last applied event by up to 120 s are ignored and counted; a larger gap is treated as a clock change. |
+| Missing events | First event mid-turn → Working with "≥" elapsed time. Never infers Complete without a `Stop` that reports no background work. |
+| Compaction | `SessionStart(source=compact)` mid-turn leaves the state unchanged. |
+| Resume | Any event after `SessionEnd` re-opens the session. |
+
 ### Aggregate indicator
 
-Precedence: **Waiting > Error > Working > Unknown > Complete > Idle** (ended sessions are
-excluded). The menu bar shows the aggregate symbol plus the number of Working sessions, so a
-Waiting or Error indicator still shows how many sessions are working.
+Precedence: **Waiting > Error > Working > Unknown > Complete > Idle** (ended and hidden
+sessions are excluded; unobserved sessions count as Unknown). Working includes Working —
+Background; the menu bar uses an hourglass instead of the circular arrows when every working
+session is only doing background work. The number next to the symbol counts working sessions.
+
+### Monitoring health
+
+Health reports separately: hooks installed (structured check of `settings.json`), hook
+executable present, hooks executing (time of the last hook run and rejected/failed runs in the
+diagnostic log), event ingestion (state directory, directory watcher, unreadable records),
+coverage ("N of M running sessions observed"), and background-task visibility (whether any
+`Stop` reported `background_tasks`). Incomplete coverage is a warning, never "Monitoring
+active". `claude-status-ctl diagnose` prints the same plus the PID → session mapping, and
+`claude-status-ctl selftest` runs the installed hook against an isolated store to validate
+emission, ingestion and state derivation end to end.
 
 ## Data captured
 
 Only these fields are kept per session: session ID, event name, timestamps, `cwd`,
 `CLAUDE_PROJECT_DIR`, git repository / worktree name (derived from `.git` on disk), client
 type, entrypoint label, Claude process PID and start time, tool-use IDs currently in flight
-(opaque IDs, no names or arguments), subagent and background-task counts, documented
+(opaque IDs, no names or arguments), subagent counts, background tasks (opaque `id`, `type`
+label and `status` only — never `description` or `command`), scheduled-wakeup counts, documented
 `SessionStart.source`, `SessionEnd.reason`, `Notification.notification_type` and
 `StopFailure.error` category values. Prompts, tool inputs and outputs, transcript paths,
 assistant messages, session titles and error details are never stored.

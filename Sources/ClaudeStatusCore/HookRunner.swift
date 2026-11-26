@@ -30,6 +30,27 @@ public enum HookRunner {
         public var accepted: Bool
         public var detail: String
         public var record: SessionRecord?
+        /// Privacy-safe evidence for the log: background task counts and statuses only.
+        public var evidence: String = ""
+    }
+
+    /// `bg=2(shell:running,subagent:running) wake=1` for Stop / SubagentStop; `bg=?` when the
+    /// documented `background_tasks` array was absent. Only type labels and statuses.
+    public static func evidence(_ e: HookEvent) -> String {
+        guard e.name == .stop || e.name == .subagentStop else { return "" }
+        var out: String
+        if let tasks = e.backgroundTasks {
+            out = "bg=\(tasks.count)"
+            if !tasks.isEmpty {
+                let items = tasks.prefix(8).map { "\($0.type.replacingOccurrences(of: " ", with: "_")):\($0.status)" }
+                out += "(\(items.joined(separator: ",")))"
+            }
+        } else {
+            out = "bg=?"
+        }
+        if let sc = e.schedules { out += " wake=\(sc.oneShot) cron=\(sc.recurring)" }
+        if e.agentId != nil { out += " agent" }
+        return out
     }
 
     /// Read stdin retaining at most `limit` bytes; drains the rest so the writer never blocks.
@@ -99,7 +120,7 @@ public enum HookRunner {
                 if let p = previous, next.ignoredOutOfOrder > p.ignoredOutOfOrder { note = "ignored-out-of-order" }
                 return next
             }
-            return Outcome(accepted: true, detail: note, record: rec)
+            return Outcome(accepted: true, detail: note, record: rec, evidence: evidence(event))
         } catch {
             return Outcome(accepted: false, detail: "store:\(error)", record: nil)
         }
@@ -119,6 +140,6 @@ public enum HookRunner {
         let ev = outcome.record?.lastEventName ?? "-"
         let iso = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: started))
         try? paths.ensureDirectories()
-        DiagnosticsLog(url: paths.hookLog).append("\(iso) \(ev) \(sid) \(outcome.detail) \(micros)us bytes=\(data.count)\(truncated ? " truncated" : "")")
+        DiagnosticsLog(url: paths.hookLog).append("\(iso) \(ev) \(sid) \(outcome.detail) \(micros)us bytes=\(data.count)\(truncated ? " truncated" : "")\(outcome.evidence.isEmpty ? "" : " " + outcome.evidence)")
     }
 }

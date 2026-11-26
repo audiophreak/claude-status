@@ -7,13 +7,16 @@ Uses a few short turns of the user's normal Claude plan. Never reads or prints p
 response text from Claude Status state (which holds none); terminal output is only scanned
 for the trust dialog and is not stored.
 
-usage: python3 scripts/acceptance/cli_acceptance.py [--cwd DIR] [--skip-interrupt]
+usage: python3 scripts/acceptance/cli_acceptance.py [--cwd DIR] [--skip-interrupt] [--skip-background]
+       [--skip-kill]
 """
 import json, os, pty, select, signal, subprocess, sys, time
 
 STATE = os.path.expanduser("~/Library/Application Support/ClaudeStatus/sessions")
 CWD = sys.argv[sys.argv.index("--cwd") + 1] if "--cwd" in sys.argv else os.getcwd()
 SKIP_INTERRUPT = "--skip-interrupt" in sys.argv
+SKIP_BACKGROUND = "--skip-background" in sys.argv
+CTL = os.path.expanduser("~/Library/Application Support/ClaudeStatus/bin/claude-status-ctl")
 MARK = "cs-acceptance-%d" % os.getpid()
 
 results, transitions = [], []
@@ -67,6 +70,12 @@ def poll():
             last = key
     return r
 
+def derived(sid):
+    """Status label Claude Status derives for the session (same code as the menu bar)."""
+    out = subprocess.run([CTL, "list"], capture_output=True, text=True).stdout
+    line = next((l for l in out.splitlines() if sid and l.startswith(sid[:8])), "")
+    return line[10:34].strip() if line else ""
+
 def wait_until(pred, timeout):
     end = time.time() + timeout
     seen = []
@@ -103,6 +112,34 @@ try:
     check("approved tool actually ran", os.path.isdir("/tmp/" + MARK))
     try: os.rmdir("/tmp/" + MARK)
     except OSError: pass
+
+    # 2b. Background command: the foreground response finishes while the command runs, then
+    #     Claude Code continues on its own when the command exits (no prompt is typed).
+    if not SKIP_BACKGROUND:
+        time.sleep(1)
+        send("Background test. Use the Bash tool with run_in_background set to true to run exactly: "
+             "sleep 40; echo cs-bg-done   Then end your turn at once, replying only: started. "
+             "When you are notified that it finished, reply only: done (no tools).")
+        time.sleep(0.5); send("\r")
+        r, seen = wait_until(lambda r, s: (r["state"] == "waiting") or
+                             (r["state"] == "complete" and r.get("lastEventName") == "Stop" and "working" in s), 120)
+        if r and r["state"] == "waiting":
+            time.sleep(1.0); send("\r")
+            r, seen = wait_until(lambda r, s: r["state"] == "complete" and r.get("lastEventName") in ("Stop", "SubagentStop"), 120)
+        stop_at = r and r["lastEventAt"]
+        bg = (r or {}).get("background")
+        check("Stop reports the running background task (documented background_tasks)",
+              bg is not None and len([t for t in bg if t.get("status") == "running"]) >= 1, "background=%s" % bg)
+        label = derived(sid)
+        check("foreground finished + background running -> Working — Background", label == "Working — Background", label)
+        # Automatic continuation: wait for the first event after the background command exits.
+        r, seen = wait_until(lambda r, s: r["lastEventAt"] > (stop_at or 0) + 20, 120)
+        log("    continuation began with %s (state=%s reason=%s)" % (r and r.get("lastEventName"), r and r["state"], r and r.get("reason")))
+        check("background exit -> Claude continues on its own -> Working (first event after exit)",
+              r is not None and r["state"] == "working", r and "first event %s" % r.get("lastEventName"))
+        r, seen = wait_until(lambda r, s: r["state"] == "complete" and r.get("background") == [] and r["lastEventAt"] > (stop_at or 0) + 20, 120)
+        label = derived(sid)
+        check("all work finished -> Complete (Stop reported no background work)", label == "Complete", label)
 
     # 3. Interrupts (Esc). Claude Code documents no hook for an interrupt outside a tool,
     #    so these record what is actually emitted and assert only that an interrupted turn

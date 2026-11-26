@@ -9,7 +9,7 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(nsImage: StatusStyle.menuBarImage(model.aggregate))
+            Image(nsImage: StatusStyle.menuBarImage(model.aggregate, activity: model.aggregateActivity))
             if let text = labelText { Text(text).monospacedDigit() }
         }
         .accessibilityElement(children: .ignore)
@@ -28,7 +28,9 @@ struct MenuBarLabel: View {
         var bits: [String] = ["Claude Status: \(model.aggregate.label)"]
         if c.waiting > 0 { bits.append("\(c.waiting) waiting for you") }
         if c.error > 0 { bits.append("\(c.error) with errors") }
-        if c.working > 0 { bits.append("\(c.working) working") }
+        if c.working - c.background > 0 { bits.append("\(c.working - c.background) working") }
+        if c.background > 0 { bits.append("\(c.background) working in the background") }
+        if c.unknown > 0 { bits.append("\(c.unknown) unknown") }
         return bits.joined(separator: ", ")
     }
 }
@@ -46,20 +48,25 @@ struct DashboardView: View {
     private var rows: some View {
         TimelineView(.periodic(from: .now, by: visible ? 1 : 3600)) { ctx in
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(model.sessions) { s in
+                let shown = visibleSessions
+                ForEach(shown) { s in
                     SessionRow(session: s, now: ctx.date.timeIntervalSince1970, showDirectory: showDirectories)
-                    if s.id != model.sessions.last?.id { Divider().padding(.leading, 38) }
+                    if s.id != shown.last?.id { Divider().padding(.leading, 38) }
                 }
             }
         }
     }
 
+    private var visibleSessions: [EffectiveSession] { model.sessions.filter { !$0.dismissed } }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            if model.sessions.isEmpty {
-                Text("No Claude Code sessions observed yet.\nSessions appear after their next prompt or tool event.")
+            if visibleSessions.isEmpty {
+                Text(model.hiddenCount > 0
+                     ? "\(model.hiddenCount) finished session\(model.hiddenCount == 1 ? "" : "s") hidden. They reappear on their next event."
+                     : "No Claude Code sessions detected.\nSessions appear when Claude Code starts or fires its next event.")
                     .font(.callout).foregroundStyle(.secondary)
                     .padding(.horizontal, 14).padding(.vertical, 12)
             } else {
@@ -88,18 +95,9 @@ struct DashboardView: View {
             Text("Claude Status").font(.headline)
             Spacer()
             let c = model.counts
-            Text(summary(c)).font(.caption).foregroundStyle(.secondary)
+            Text(Presentation.summary(c)).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-    }
-
-    private func summary(_ c: Presentation.Counts) -> String {
-        var parts: [String] = []
-        if c.waiting > 0 { parts.append("\(c.waiting) waiting") }
-        if c.error > 0 { parts.append("\(c.error) error") }
-        if c.working > 0 { parts.append("\(c.working) working") }
-        if c.complete > 0 { parts.append("\(c.complete) complete") }
-        return parts.isEmpty ? "No active sessions" : parts.joined(separator: " · ")
     }
 
     private var healthSection: some View {
@@ -117,14 +115,17 @@ struct DashboardView: View {
                 ForEach(h.problems.dropFirst(), id: \.self) { p in
                     Text("• \(p)").font(.caption2).foregroundStyle(.secondary)
                 }
+                Text("\(h.coverageText) · \(h.backgroundVisibilityText)")
+                    .font(.caption2).foregroundStyle(.secondary)
                 if model.integrationNeedsSetup {
                     Button("Set Up Claude Code Hooks…") { IntegrationUI.confirmSetup(model) }
                         .controlSize(.small)
                         .padding(.top, 2)
                 }
                 if h.unobservedClaudeProcesses > 0 {
-                    Text("\(h.unobservedClaudeProcesses) running Claude process\(h.unobservedClaudeProcesses == 1 ? "" : "es") not yet observed — shown after their next hook event")
+                    Text("Unobserved sessions show as Unknown until their next prompt, tool call or turn end. No restart is needed.")
                         .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -136,7 +137,7 @@ struct DashboardView: View {
             Text("v\(ClaudeStatusVersion.current)").font(.caption2).foregroundStyle(.tertiary)
             Spacer()
             Button("Clear Finished") { model.clearFinished() }
-                .help("Remove completed, ended and errored sessions. Active sessions are kept.")
+                .help("Remove ended sessions and hide finished ones. Working (including background), waiting and unknown sessions are kept.")
             Button("Preferences…") {
                 openWindow(id: "preferences")
                 NSApp.activate(ignoringOtherApps: true)
@@ -156,7 +157,7 @@ struct SessionRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            StateBadge(state: session.state).padding(.top, 1)
+            StateBadge(state: session.state, activity: session.activity, unobserved: session.unobserved).padding(.top, 1)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
@@ -170,8 +171,12 @@ struct SessionRow: View {
                     Text(Presentation.timeText(session, now: now))
                         .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
                 }
-                Text("\(session.state.label) — \(session.detail)")
+                Text("\(session.label) — \(session.detail)")
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                if session.showsDimensions {
+                    Text("Foreground: \(session.foregroundSummary) · Background: \(session.backgroundSummary.replacingOccurrences(of: " running", with: ""))")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(2)
+                }
                 if showDirectory, let cwd = session.record.cwd {
                     Text(abbreviate(cwd)).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 }
@@ -179,7 +184,8 @@ struct SessionRow: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 7)
         .accessibilityElement(children: .combine)
-        .help("Session \(session.record.sessionId)\n\(session.record.cwd ?? "")")
+        .help(session.unobserved ? "Claude process \(session.record.pid ?? 0) — not yet observed\n\(session.record.cwd ?? "")"
+              : "Session \(session.record.sessionId)\n\(session.record.cwd ?? "")")
     }
 
     private var title: String {

@@ -53,6 +53,7 @@ final class DirectoryWatcher {
 final class AppModel: ObservableObject {
     @Published private(set) var sessions: [EffectiveSession] = []
     @Published private(set) var aggregate: SessionState = .idle
+    @Published private(set) var aggregateActivity: Activity = .none
     @Published private(set) var counts = Presentation.Counts()
     @Published private(set) var health: MonitoringHealth?
     @Published private(set) var watcherActive = false
@@ -69,6 +70,11 @@ final class AppModel: ObservableObject {
     private var livenessCache: [String: (alive: Bool?, at: Double)] = [:]
     private var corruptCount = 0
     private var records: [SessionRecord] = []
+    /// Running Claude processes (libproc), refreshed at most every `processScanInterval`.
+    private var processes: [DetectedProcess] = []
+    private var processesScannedAt: Double = 0
+    private let processScanInterval: Double = 10
+    private var projectInfoCache: [String: ProjectInfo?] = [:]
     private var tick = 0
     private var isPreview = false
     let notifier = Notifier()
@@ -149,15 +155,35 @@ final class AppModel: ObservableObject {
         return a
     }
 
+    private func scanProcessesIfDue(now: Double, force: Bool = false) {
+        guard force || now - processesScannedAt >= processScanInterval else { return }
+        processes = ProcessInspector.detectSessions(now: now)
+        processesScannedAt = now
+    }
+
+    private func projectInfo(_ cwd: String) -> ProjectInfo? {
+        if let cached = projectInfoCache[cwd] { return cached }
+        let info = ProjectInfo.detect(from: cwd)
+        if projectInfoCache.count > 64 { projectInfoCache.removeAll() }
+        projectInfoCache[cwd] = info
+        return info
+    }
+
     private func evaluate() {
         let now = Date().timeIntervalSince1970
-        let evaluated = records.map { Presentation.evaluate($0, now: now, alive: alive($0, now: now), lastWake: lastWake) }
+        scanProcessesIfDue(now: now)
+        var evaluated = records.map { Presentation.evaluate($0, now: now, alive: alive($0, now: now), lastWake: lastWake) }
+        // Detected Claude sessions without any hook event yet are shown, as Unknown.
+        let unobserved = Presentation.unobservedProcesses(processes, records: records)
+        evaluated += Presentation.unobservedSessions(unobserved, now: now) { [weak self] in self?.projectInfo($0) }
         let sorted = Presentation.sorted(evaluated)
         notifier.process(sorted, preferences: defaults)
         // Publish only real changes so idle refreshes do not re-render SwiftUI views.
         if sorted != sessions { sessions = sorted }
         let agg = Presentation.aggregate(sorted)
         if agg != aggregate { aggregate = agg }
+        let act = Presentation.aggregateActivity(sorted)
+        if act != aggregateActivity { aggregateActivity = act }
         let c = Presentation.counts(sorted)
         if c != counts { counts = c }
         writeTestDump()
@@ -174,7 +200,12 @@ final class AppModel: ObservableObject {
             "writtenAt": Date().timeIntervalSince1970,
             "aggregate": aggregate.rawValue,
             "working": counts.working, "waiting": counts.waiting, "error": counts.error,
-            "sessions": sessions.map { ["id": $0.id, "state": $0.state.rawValue, "ended": $0.ended, "detail": $0.detail] },
+            "activity": aggregateActivity.rawValue,
+            "background": counts.background, "unknown": counts.unknown, "unobserved": counts.unobserved,
+            "sessions": sessions.map { ["id": $0.id, "state": $0.state.rawValue, "activity": $0.activity.rawValue,
+                                        "label": $0.label, "ended": $0.ended, "dismissed": $0.dismissed,
+                                        "unobserved": $0.unobserved, "detail": $0.detail] },
+            "coverage": health?.coverageText ?? "",
             "health": health?.level.rawValue ?? "unknown",
             "hookExecutablePresent": health?.hookExecutablePresent ?? false,
             "problems": health?.problems ?? [],
@@ -187,6 +218,7 @@ final class AppModel: ObservableObject {
     private func periodic() {
         tick += 1
         livenessCache.removeAll()
+        scanProcessesIfDue(now: Date().timeIntervalSince1970, force: true)
         applyRetention()
         reload()
         if tick % 2 == 0 { refreshHealth() }
@@ -196,7 +228,9 @@ final class AppModel: ObservableObject {
 
     func refreshHealth() {
         guard !isPreview else { return }
-        let h = MonitoringHealth.check(paths: paths, settingsURL: settingsURL, records: records, corrupt: corruptCount)
+        scanProcessesIfDue(now: Date().timeIntervalSince1970)
+        let h = MonitoringHealth.check(paths: paths, settingsURL: settingsURL, records: records, corrupt: corruptCount,
+                                       processes: processes)
         if h != health { health = h }
         writeTestDump()
     }
@@ -265,36 +299,41 @@ final class AppModel: ObservableObject {
     var retentionSeconds: Double { max(defaults.double(forKey: PrefKey.retentionHours), 0.25) * 3600 }
 
     private func applyRetention() {
-        remove(retention: retentionSeconds)
+        let now = Date().timeIntervalSince1970
+        let r = retentionSeconds
+        // Take the store lock only when something is actually due.
+        guard sessions.contains(where: { s in
+            !s.unobserved && Presentation.cleanupAction(s, alive: s.processExited ? false : nil, now: now, retention: r) != .keep
+        }) else { return }
+        cleanup(retention: r)
     }
 
     func clearFinished() {
-        remove(retention: nil)
+        cleanup(retention: nil)
         reload()
     }
 
-    /// Delete removable records. Each candidate is re-read and re-evaluated under the store
-    /// lock, so a session a hook just made active again is never removed.
-    private func remove(retention: Double?) {
+    /// Finished sessions whose Claude process still runs are hidden rather than deleted, so
+    /// they stay correlated with their process and are never reported as unobserved.
+    private func cleanup(retention: Double?) {
         let now = Date().timeIntervalSince1970
-        let candidates = sessions.filter { Presentation.isRemovable($0, now: now, retention: retention) }.map(\.id)
-        guard !candidates.isEmpty else { return }
-        let store = self.store
-        try? store.withLock(timeout: 0.5) {
-            for id in candidates {
-                guard case .record(let r) = store.load(id) else { continue }
-                let fresh = Presentation.evaluate(r, now: now, alive: alive(r, now: now), lastWake: lastWake)
-                if Presentation.isRemovable(fresh, now: now, retention: retention) { try? store.delete(id) }
-            }
+        _ = SessionMaintenance.cleanup(store: store, now: now, retention: retention, lastWake: lastWake) { [weak self] r in
+            self?.alive(r, now: now)
         }
     }
 
+    var hiddenCount: Int { sessions.filter { $0.dismissed && !$0.ended }.count }
+
     /// Snapshot rendering only: display the given records without touching the store.
-    func loadPreview(records: [SessionRecord], health: MonitoringHealth?, now: Double) {
+    func loadPreview(records: [SessionRecord], unobserved: [DetectedProcess] = [], health: MonitoringHealth?, now: Double) {
         isPreview = true
-        let evaluated = Presentation.sorted(records.map { Presentation.evaluate($0, now: now, alive: nil, lastWake: nil) })
+        let evaluated = Presentation.sorted(records.map { Presentation.evaluate($0, now: now, alive: nil, lastWake: nil) }
+            + Presentation.unobservedSessions(unobserved, now: now) { cwd in
+                ProjectInfo(repoRoot: cwd, repoName: (cwd as NSString).lastPathComponent, worktreeName: nil)
+            })
         sessions = evaluated
         aggregate = Presentation.aggregate(evaluated)
+        aggregateActivity = Presentation.aggregateActivity(evaluated)
         counts = Presentation.counts(evaluated)
         self.health = health
     }
@@ -302,7 +341,7 @@ final class AppModel: ObservableObject {
     var elapsedMenuText: String? {
         guard defaults.bool(forKey: PrefKey.showElapsed) else { return nil }
         let now = Date().timeIntervalSince1970
-        let starts = sessions.filter { $0.state == .working }.compactMap(\.record.turnStartedAt)
+        let starts = sessions.filter { $0.state == .working && $0.activity == .foreground }.compactMap(\.record.turnStartedAt)
         guard let oldest = starts.min() else { return nil }
         return Format.duration(now - oldest)
     }

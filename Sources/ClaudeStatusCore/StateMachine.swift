@@ -18,8 +18,12 @@ public struct HookContext: Equatable, Sendable {
 /// Deterministic reducer: (previous record, event) -> next record.
 ///
 /// Design rules (see docs/ARCHITECTURE.md):
-/// * `Stop` from the main thread completes a turn; `Stop`/`SubagentStop` carrying an `agent_id`
-///   never completes the parent session.
+/// * The persisted `state` is the *foreground* turn state. Background work is a separate
+///   dimension (`background`, `schedules`) taken from the documented `background_tasks` and
+///   `session_crons` arrays of `Stop` / `SubagentStop`; `Presentation` combines the two.
+/// * `Stop` from the main thread completes the foreground turn only; it never implies that
+///   background work has finished. `Stop`/`SubagentStop` carrying an `agent_id` never
+///   completes the parent session.
 /// * Activity after `Stop` from the main thread means a Stop hook blocked and Claude continued.
 /// * Events older than the last applied event are ignored (out-of-order protection).
 /// * Repeating an event is idempotent with respect to state.
@@ -73,6 +77,9 @@ public enum StateMachine {
 
         guard let name = e.name else { return r }   // unregistered event: activity only
 
+        // Any event shows a session hidden by "Clear Finished" again.
+        r.dismissed = nil
+
         // Any event other than SessionEnd proves the session is alive again (e.g. resume).
         if r.ended && name != .sessionEnd {
             r.ended = false
@@ -90,6 +97,10 @@ public enum StateMachine {
                 r.errorCategory = nil
                 r.inFlightTools = []
                 r.turnStartedAt = nil
+            }
+            if e.source == "startup" || e.source == "resume" {
+                // A new Claude Code process: background work of a previous process is gone.
+                clearBackground(&r, known: false)
             }
 
         case .userPromptSubmit:
@@ -146,7 +157,14 @@ public enum StateMachine {
             if e.agentId != nil {
                 activity(&r, e)   // subagent/teammate stop never completes the parent
             } else {
-                r.backgroundTasks = e.backgroundTaskCount
+                applyBackgroundReport(&r, e)
+                if e.backgroundTasks == nil {
+                    // Not reported: background work is unknown, never assumed finished.
+                    r.background = nil
+                    r.backgroundTasks = nil
+                    r.backgroundReportedAt = nil
+                }
+                if e.schedules == nil { r.schedules = nil }
                 endTurn(&r, at: e.timestamp)
                 r.state = .complete
                 r.reason = nil
@@ -169,12 +187,15 @@ public enum StateMachine {
 
         case .subagentStop:
             r.activeSubagents = max(r.activeSubagents - 1, 0)
+            // SubagentStop carries the parent session's background_tasks / session_crons.
+            applyBackgroundReport(&r, e)
 
         case .sessionEnd:
             r.ended = true
             r.endReason = e.reason
             r.inFlightTools = []
             r.activeSubagents = 0
+            clearBackground(&r, known: true)
             if r.turnStartedAt != nil { endTurn(&r, at: e.timestamp) }
             r.state = .idle
             r.reason = .ended
@@ -192,7 +213,30 @@ public enum StateMachine {
         r.turnObservedFromStart = exact
         r.turnSeq += 1
         r.inFlightTools = []
-        r.backgroundTasks = nil
+        // Background work started in earlier turns may still be running; it is re-reported
+        // at the end of this turn, so the last report is kept.
+    }
+
+    static func applyBackgroundReport(_ r: inout SessionRecord, _ e: HookEvent) {
+        if let tasks = e.backgroundTasks {
+            let active = tasks.filter(\.isActive)
+            r.background = active
+            r.backgroundTasks = active.count
+            r.backgroundReportedAt = e.timestamp
+        }
+        if let sc = e.schedules { r.schedules = sc }
+    }
+
+    static func clearBackground(_ r: inout SessionRecord, known: Bool) {
+        r.background = known ? [] : nil
+        r.backgroundTasks = known ? 0 : nil
+        r.backgroundReportedAt = known ? r.lastEventAt : nil
+        r.schedules = known ? ScheduleCounts() : nil
+    }
+
+    /// Background work or a one-shot wakeup was pending at the last report.
+    static func continuationPending(_ r: SessionRecord) -> Bool {
+        (r.activeBackground?.isEmpty == false) || (r.schedules?.oneShot ?? 0) > 0
     }
 
     static func endTurn(_ r: inout SessionRecord, at t: Double) {
@@ -246,8 +290,9 @@ public enum StateMachine {
             // that does not reopen the main turn. Main-thread activity after Stop means a
             // Stop hook blocked the stop and Claude continued.
             if e.agentId == nil {
+                let auto = continuationPending(r)
                 resumeWorking(&r, at: e.timestamp)
-                r.reason = .continued
+                r.reason = auto ? .autoContinued : .continued
             }
         case .idle, .unknown, .error:
             if e.agentId == nil || r.state != .error {
