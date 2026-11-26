@@ -24,6 +24,18 @@ struct ClaudeStatusApp: App {
             }
             return
         }
+        // Non-interactive equivalents of the in-app "Set Up Claude Code Hooks…" and
+        // "Remove Hooks…" buttons (same code path, no dialogs). Used by tests and scripts.
+        if args.contains("--setup-hooks") || args.contains("--remove-hooks") {
+            let setup = args.contains("--setup-hooks")
+            let result: (ok: Bool, message: String) = MainActor.assumeIsolated {
+                let m = AppModel()
+                m.refreshHealth()
+                return setup ? m.setupIntegration() : m.removeIntegration()
+            }
+            print(result.message)
+            exit(result.ok ? 0 : 1)
+        }
         if args.contains("--register-login-item") {
             try? SMAppService.mainApp.register()
         }

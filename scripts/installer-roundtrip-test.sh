@@ -60,6 +60,23 @@ run "$REPO_ROOT/scripts/uninstall.sh" --keep-login-item --purge-backups > "$FAKE
 check "purge removes all Claude Status state" test ! -e "$F_ROOT"
 check "settings still byte-identical to original" test "$(sha "$FAKE/.claude/settings.json")" = "$orig"
 
+echo "Downloaded-app flow (app's own setup/removal code, no source scripts)"
+FAKE2="$FAKE/home2"; mkdir -p "$FAKE2/.claude" "$FAKE2/Applications"
+cp "$REPO_ROOT/Tests/Fixtures/settings/existing-hooks.json" "$FAKE2/.claude/settings.json"
+ditto "$APP_BUNDLE" "$FAKE2/Applications/$APP_NAME.app"
+APPBIN2="$FAKE2/Applications/$APP_NAME.app/Contents/MacOS/ClaudeStatus"
+F2_ROOT="$FAKE2/Library/Application Support/ClaudeStatus"
+F2_CTL() { "$F2_ROOT/bin/claude-status-ctl" "$@" --settings "$FAKE2/.claude/settings.json" --home "$F2_ROOT"; }
+env -u CLAUDE_CONFIG_DIR -u CLAUDE_STATUS_HOME HOME="$FAKE2" "$APPBIN2" --setup-hooks > "$FAKE/app-setup.log" 2>&1
+check "app --setup-hooks exits 0" test $? = 0
+check "app installed helpers from its bundle" cmp -s "$F2_ROOT/bin/claude-status-hook" "$APP_BUNDLE/Contents/Helpers/claude-status-hook"
+check "app registered healthy hooks" F2_CTL verify-hooks
+check "app setup preserved other settings" F2_CTL verify-preserved --backup "$REPO_ROOT/Tests/Fixtures/settings/existing-hooks.json"
+env -u CLAUDE_CONFIG_DIR -u CLAUDE_STATUS_HOME HOME="$FAKE2" "$APPBIN2" --setup-hooks > "$FAKE/app-setup2.log" 2>&1
+check "second app setup reports no change" grep -q "already installed" "$FAKE/app-setup2.log"
+env -u CLAUDE_CONFIG_DIR -u CLAUDE_STATUS_HOME HOME="$FAKE2" "$APPBIN2" --remove-hooks > "$FAKE/app-remove.log" 2>&1
+check "app --remove-hooks restores original bytes" test "$(sha "$FAKE2/.claude/settings.json")" = "$orig"
+
 echo "Isolation"
 check "real user settings untouched" test "$(sha "$REAL_SETTINGS")" = "$real_before"
 

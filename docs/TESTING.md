@@ -36,13 +36,16 @@ Run the real signed executables from `.build/dist`:
   with working count, restart recovery including events received while the app was down,
   missing-hook health, watcher re-arm after the state directory is replaced.
 
-## Installer round trip (`scripts/installer-roundtrip-test.sh`, 18 checks)
+## Installer round trip (`scripts/installer-roundtrip-test.sh`, 24 checks)
 
 Runs the real `install.sh`, a re-install (update) and `uninstall.sh` (with and without
 `--purge-backups`) against a temporary fake `HOME` whose settings already contain unrelated hooks.
 It checks the bundle signature, helpers, hook health, preservation, file mode, backup bytes,
 that a re-install doesn't rewrite settings, byte-identical restoration and state purge. It also
-hashes the real user's settings file before and after to prove it was not touched.
+hashes the real user's settings file before and after to prove it was not touched. A second fake
+`HOME` exercises the downloaded-app flow: `ClaudeStatus --setup-hooks` / `--remove-hooks` run the
+same code as the in-app buttons (helpers copied from the bundle, hooks registered and preserved,
+idempotent, removal byte-identical).
 
 ## Real-world acceptance
 
@@ -61,7 +64,7 @@ and picked up live) and an isolated one-reply Desktop Code session.
 |---|---|
 | Unit (`swift test`) | 86 / 86 passed |
 | Integration (`scripts/integration-test.sh`) | 58 / 58 passed |
-| Installer round trip (`scripts/installer-roundtrip-test.sh`) | 18 / 18 passed |
+| Installer round trip (`scripts/installer-roundtrip-test.sh`) | 24 / 24 passed |
 
 ### Real Claude Code CLI (`scripts/acceptance/cli_acceptance.py`, final run 12 / 12, 1 skipped)
 

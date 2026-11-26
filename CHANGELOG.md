@@ -27,6 +27,8 @@ First public release.
   concurrent-modification detection and post-write verification.
 - In-app **Set Up Claude Code Hooks…** / **Remove Hooks…** (with confirmation), so a downloaded
   app works without a source checkout; helpers are refreshed automatically after app updates.
+  The same actions are available non-interactively as `ClaudeStatus --setup-hooks` and
+  `--remove-hooks`.
 - Settings location follows Claude Code: `$CLAUDE_CONFIG_DIR/settings.json` or
   `$HOME/.claude/settings.json`.
 - Build, test, install, update, diagnose, uninstall and release-packaging scripts; unit,

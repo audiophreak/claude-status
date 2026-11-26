@@ -137,7 +137,8 @@ catches up when it starts. Design details, state diagram and edge cases:
 
 ## What setup changes
 
-Setup (app button, `scripts/install.sh` or `claude-status-ctl install-hooks`):
+Setup (the app's button, `"/Applications/Claude Status.app/Contents/MacOS/ClaudeStatus" --setup-hooks`,
+`scripts/install.sh`, or `claude-status-ctl install-hooks`):
 
 1. Copies `claude-status-hook` and `claude-status-ctl` to
    `~/Library/Application Support/ClaudeStatus/bin/`.
