@@ -105,12 +105,12 @@ cannot be exercised or is not reported by Claude Code; NOT TESTED = not run.
 | Background subagents | VERIFIED (incl. "subagent active" evidence) | VERIFIED (incl. two concurrent) |
 | Background monitor | VERIFIED (type `monitor`) | VERIFIED (reported as `shell`) |
 | Scheduled continuation (one-shot) | VERIFIED — *Continuation scheduled — continues at 11:43* → fired → Complete; cancellation with `CronDelete` | VERIFIED — same, incl. cancellation |
-| Permission requests | PARTIAL — request → *Waiting — Approval required*; approval by a person → Working → Complete (recorded on the 1.0.2 install, replayed through 1.1.0); denial from the Desktop UI not exercised (the harness never answers prompts) | PARTIAL — request → Waiting; decline with Esc (no event, stays Waiting, next prompt resolves) verified; approval not exercised (never approved by the harness) |
-| User-input requests (`AskUserQuestion`) | PARTIAL — *Waiting — Question for you* verified; answering from the Desktop UI not exercised | VERIFIED — answer → Working → Complete; cancel with Esc (no event) |
+| Permission requests | PARTIAL — request → *Waiting — Approval required* (live on 1.1.0, kept after `permission_prompt`); approval by a person while a background task ran → Working → Complete (recorded live earlier the same day, replayed through 1.1.0); denial from the Desktop UI not exercised (the harness never answers prompts) | PARTIAL — request → Waiting; decline with Esc (no event, stays Waiting, next prompt resolves) verified; approval not exercised (never approved by the harness) |
+| User-input requests (`AskUserQuestion`) | VERIFIED — *Waiting — Question for you* (kept after `permission_prompt`) → answered by a person in the Desktop UI → Working → Complete | VERIFIED — answer → Working → Complete; cancel with Esc (no event, stays Waiting) |
 | Multiple concurrent sessions | VERIFIED (3 fixtures + 5 other sessions) | VERIFIED (two sessions in one folder, separate rows) |
 | Existing session discovery | VERIFIED — sessions running before the upgrade/restart listed with their state; a Desktop process with no event listed as *Unknown — Not observed* | VERIFIED |
 | Application restart and recovery | VERIFIED — SIGKILL + relaunch during the soak, states identical | VERIFIED — same |
-| Clear Finished and retention | VERIFIED — see below | VERIFIED |
+| Clear Finished and retention | VERIFIED — see below | VERIFIED — see below |
 | Extended-duration monitoring | VERIFIED — 24-minute background task during the soak | VERIFIED — 31-minute soak |
 | MCP elicitation, agent teams | NOT TESTED | NOT TESTED |
 
@@ -132,7 +132,19 @@ folder + SIGKILL mid-turn → *Unknown (process exited)* (3), `/exit` → ended 
 | Scheduled one-shot wakeup | Continuation scheduled — "Claude continues at 11:43" → (11:43:01) Working — Continuing → Complete |
 | Monitor | Working — Background (monitor) → Working — Continuing → Complete |
 | Stop during text generation | Working → Unknown — Possibly interrupted (1 s after the internal-agent event) |
-| AskUserQuestion | Waiting — Question for you (kept after `permission_prompt`) |
+| AskUserQuestion | Waiting — Question for you (kept after `permission_prompt`) → answered in the UI → Working → Complete |
+| Permission request (`touch` outside the allow-list) | Waiting — Approval required (kept after `permission_prompt`) |
+| Activity after Clear Finished | hidden session → shown again on its next event → Complete |
+
+### Clear Finished on the real system (installed 1.1.0)
+
+`claude-status-ctl clear-finished` (the same `SessionMaintenance` code as the dashboard
+button) with 15 records: removed 8 (ended sessions and two CLI test sessions whose process had
+exited), hid 3 finished Desktop test sessions whose processes were running, and kept every
+running session untouched (a foreground turn, two CLI/Desktop sessions with background work —
+one of them a long-running project session — and an already hidden one). A hidden test session
+reappeared on its next event. Retention, the 200-record bound and Unknown/background
+protection are covered by unit and integration tests.
 
 Earlier runs in the same session (recorded, replayed by `RecordedSequenceTests`): background
 cancellation in the same turn, schedule cancellation, Stop during a tool followed by the
@@ -140,7 +152,32 @@ internal-agent event, approval granted by a person while a background task ran.
 
 ### Extended-duration monitoring (`soak.py`, installed 1.1.0)
 
-SOAK_RESULTS
+**PASS — 31.0 minutes, 0 failures** (installed 1.1.0, Desktop and CLI concurrently, five
+other Claude sessions running). Sanitized transitions (`soak.jsonl`, id prefixes only):
+
+| Time | Session | Derived status |
+|---|---|---|
+| 0 s | Desktop fixture A | Working — Background (24-minute background task started just before) |
+| 0 s | Desktop fixture B | Complete (idle for the whole run) |
+| 10 s → 16 s | CLI | Working → **Working — Background** (26-minute background task) |
+| 65 s → 372 s | CLI | 5-minute foreground Bash call: Working (shown *Continuing*, because the prompt was typed while background work was pending — the documented ambiguity) for 300 s, never Unknown |
+| 372 s | CLI | Working — Background |
+| 485 s | — | Claude Status **SIGKILLed and relaunched**: all watched sessions identical before and after |
+| 372 s → 1573 s | CLI | **Working — Background for 20 minutes without a single hook event**, report age growing |
+| 1001 s → 1006 s | Desktop fixture A | background task exited → Working — Continuing → **Complete** |
+| 1573 s → 1583 s | CLI | background task exited → Working — Continuing → **Complete** |
+| 1860 s | CLI | `/exit` → ended |
+
+Checks: never Complete while a background task ran, never Unknown or Error while the
+processes ran, foreground tool shown Working for its full 300 s, state identical across the
+restart, Complete after each background task, idle session Complete throughout, session ended
+after `/exit`, harness processes and test tasks cleaned up. An earlier attempt was discarded
+because of a harness bug (it compared a state sampled before its own prompt); it is not
+counted.
+
+Root cause of the 1.0.2 "25-minute recording exited 143": the read-only recorder was started
+with a 25-minute duration and deliberately stopped with `kill` (SIGTERM → 143) after 19.6
+minutes when that assignment finished. It never completed and is not counted as a soak test.
 
 ### Upgrade on the real system (1.0.2 → 1.1.0, eight Claude sessions running)
 
