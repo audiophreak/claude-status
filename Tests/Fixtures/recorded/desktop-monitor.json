@@ -1,0 +1,77 @@
+{
+ "client": "desktop",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 1.92,
+   "event": "PreToolUse",
+   "tool_name": "ToolSearch",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 1.95,
+   "event": "PostToolUse",
+   "tool_name": "ToolSearch",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 3.66,
+   "event": "PreToolUse",
+   "tool_name": "Monitor",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 3.71,
+   "event": "PostToolUse",
+   "tool_name": "Monitor",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 7.15,
+   "event": "Stop",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "monitor",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 8.96,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "monitor",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 28.85,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 32.7,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  },
+  {
+   "t": 34.25,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ]
+}

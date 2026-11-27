@@ -46,6 +46,9 @@ jobs:
       - name: Installer / update / uninstall round trip (isolated HOME)
         run: scripts/installer-roundtrip-test.sh
 
+      - name: Upgrade from the previous release and roll back (isolated HOME)
+        run: scripts/upgrade-rollback-test.sh
+
       - name: Release packaging dry run
         run: scripts/package-release.sh
 

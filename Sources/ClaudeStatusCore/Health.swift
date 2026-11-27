@@ -47,6 +47,13 @@ public struct MonitoringHealth: Equatable, Sendable {
         return "\(observed) of \(n) running session\(n == 1 ? "" : "s") observed"
     }
 
+    /// "Hooks installed · last ran 12s ago · 0 rejected"
+    public func hooksText(now: Double) -> String {
+        let inst = hooksInstalled ? (hookStatus.kind == .partial ? "Hooks partly installed" : "Hooks installed") : "Hooks not installed"
+        let ran = hookLastRanAt.map { "last ran \(Format.ago(now - $0))" } ?? "no run recorded"
+        return "\(inst) · \(ran) · \(recentHookFailures) rejected"
+    }
+
     public var backgroundVisibilityText: String {
         switch backgroundVisibility {
         case .supported: return "Background tasks reported by Claude Code"

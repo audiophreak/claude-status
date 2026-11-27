@@ -1,0 +1,89 @@
+{
+ "client": "cli",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 2.48,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 2.56,
+   "event": "PostToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 4.05,
+   "event": "Stop",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 7.55,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 11.28,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 14.0,
+   "event": "PreToolUse",
+   "tool_name": "ToolSearch",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 14.05,
+   "event": "PostToolUse",
+   "tool_name": "ToolSearch",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 16.04,
+   "event": "PreToolUse",
+   "tool_name": "TaskStop",
+   "tool_use_id": "toolu_03"
+  },
+  {
+   "t": 16.1,
+   "event": "PostToolUse",
+   "tool_name": "TaskStop",
+   "tool_use_id": "toolu_03"
+  },
+  {
+   "t": 19.25,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  },
+  {
+   "t": 21.34,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ]
+}

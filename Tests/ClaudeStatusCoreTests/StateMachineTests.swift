@@ -69,10 +69,14 @@ final class StateMachineTests: XCTestCase {
         XCTAssertTrue(r.inFlightTools.isEmpty)
     }
 
-    func testInterruptIsReliableError() {
+    func testInterruptIsCancellationNotError() {
+        // A user cancellation is not a terminal failure: it ends the turn (Idle — Interrupted),
+        // never Error (red) and never Complete.
         let r = apply([ev(.userPromptSubmit, t: 1), ev(.preToolUse, t: 2, toolUseId: "a"), ev(.postToolUseFailure, t: 5, toolUseId: "a", interrupt: true)])
-        XCTAssertEqual(r.state, .error)
+        XCTAssertEqual(r.state, .idle)
         XCTAssertEqual(r.reason, .interrupted)
+        XCTAssertNil(r.errorCategory)
+        XCTAssertEqual(Presentation.evaluate(r, now: 6, alive: true, lastWake: nil).label, "Idle — Interrupted")
         XCTAssertEqual(r.lastTurnDuration, 4)
         // The next prompt clears the error.
         let r2 = apply([ev(.userPromptSubmit, t: 6)], from: r)
@@ -169,7 +173,7 @@ final class StateMachineTests: XCTestCase {
         let afterStop = apply([ev(.userPromptSubmit, t: 1), ev(.stop, t: 2), ev(.notification, t: 62, notification: "idle_prompt")])
         XCTAssertEqual(afterStop.state, .complete, "idle prompt after Stop is just 'ready'")
         let noStop = apply([ev(.userPromptSubmit, t: 1), ev(.notification, t: 62, notification: "idle_prompt")])
-        XCTAssertEqual(noStop.state, .waiting)
+        XCTAssertEqual(noStop.state, .idle, "Claude is at its input prompt: the turn ended without a Stop")
         XCTAssertEqual(noStop.reason, .idleInput)
     }
 

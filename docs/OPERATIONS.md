@@ -48,6 +48,23 @@ next event, with "≥" on its elapsed time.
 `scripts/update.sh` runs the unit tests and reinstalls. Session history and preferences are
 kept; hook registration is only rewritten if it needs repair (for example a changed path).
 
+Updating while Claude sessions run is safe: helpers are replaced as new files (`rename(2)`),
+so a hook running at that moment completes with the old binary and the next one uses the new
+one; the app is replaced after it quits (previous bundle to the Trash) and reads the same
+records on start, so running work stays visible (verified on the real system 1.0.2 → 1.1.0
+with eight running sessions, and by `scripts/upgrade-rollback-test.sh`).
+
+## Rollback to another version
+
+`scripts/rollback.sh PATH.zip|PATH.app [--sha256 HEX] [--no-launch]` switches to any 1.x build:
+it verifies the checksum (optional), code signature, architecture and bundle identifier,
+quits the app, moves the current bundle to the Trash, installs the chosen one, runs its own
+`--setup-hooks` (installs *its* helpers, verifies the registration — identical in 1.x, so
+`settings.json` is not rewritten), runs its self-test and relaunches it. Session records are
+kept and remain readable in both directions (schema 1, optional fields only, no new enum
+values). Tested by `scripts/upgrade-rollback-test.sh` (previous public release → this build →
+previous release → this build, isolated `HOME`, settings byte-identical throughout).
+
 ## Uninstall and rollback
 
 `scripts/uninstall.sh [--purge-state] [--purge-backups] [--keep-login-item]` removes, in order:
@@ -61,7 +78,7 @@ kept; hook registration is only rewritten if it needs repair (for example a chan
    `--purge-backups` the settings backups) plus app preferences.
 4. The app bundle (moved to the Trash) and the two helper executables.
 
-**Rollback** of a failed or unwanted installation is the same selective uninstall. Old
+**Removing** a failed or unwanted installation is the same selective uninstall. Old
 backups are never restored blindly. `claude-status-ctl restore-backup --backup FILE` only
 proceeds when the current settings differ from the backup in nothing but Claude Status hooks
 and otherwise refuses.
@@ -84,8 +101,8 @@ structurally. Changes you make after installation are reported as differences, b
 |---|---|---|
 | `~/Applications/Claude Status.app` | Application (ad-hoc signed unless a local development identity exists) | |
 | `~/Library/Application Support/ClaudeStatus/bin/` | `claude-status-hook`, `claude-status-ctl` | 0700 dir |
-| `…/ClaudeStatus/sessions/<session_id>.json` | One record per session | 0600 / 0700 dir |
-| `…/ClaudeStatus/logs/hook.log` (+ `.1`) | Event name, session-ID prefix, result, duration; rotates at 256 KB | 0600 |
+| `…/ClaudeStatus/sessions/<session_id>.json` | One record per session (at most 200; oldest ended first) | 0600 / 0700 dir |
+| `…/ClaudeStatus/logs/hook.log` (+ `.1`) | Event name, session-ID prefix, result, duration, and type labels (background tasks, notification type, interrupt, wakeup time); rotates at 256 KB | 0600 |
 | `…/ClaudeStatus/backups/` | `settings.json.<time>.<install\|uninstall>.<pid>.bak` | 0600 / 0700 dir |
 | `…/ClaudeStatus/install-manifest.json` | Version, events, hook command, settings hash after install | 0600 |
 | `~/Library/Preferences/io.github.audiophreak.ClaudeStatus.plist` | App preferences | |
@@ -99,9 +116,17 @@ executing (last run, rejected events), last valid event, coverage with the PID �
 mapping, background-task visibility, app memory/CPU, signature status, recent hook log lines
 (with background-task counts for `Stop`), the session list, and runs
 `claude-status-ctl selftest`: the installed hook is fed synthetic events (prompt, Stop with a
-running background task, continuation, Stop with none, Stop without a report) in an isolated
-temporary store, and the derived states are checked. Machine-readable:
-`claude-status-ctl diagnose --json`.
+running background task, continuation, Stop with none, Stop without a report, permission
+request and answer, interrupt evidence, scheduled wakeup) in an isolated temporary store, and
+the derived states and the absence of content in the record and log are checked (12 checks).
+Machine-readable: `claude-status-ctl diagnose --json`, `claude-status-ctl list --json`.
+
+**For bug reports:** `claude-status-ctl report --output ~/Desktop/claude-status-report.md`
+writes a sanitized Markdown report (versions, health, hooks, coverage, numbered sessions with
+their derived state and confidence, Claude Code client versions, hook-log statistics). It
+contains no session identifiers, project or repository names, paths, user name or payload
+data (`--include-names` adds project names; paths are never included). Review it before
+attaching it to an issue. No verbose logging is ever enabled by default.
 
 | Symptom | Check / fix |
 |---|---|
@@ -109,9 +134,11 @@ temporary store, and the derived states are checked. Machine-readable:
 | "Hooks partially installed" / "command points to a different location" | `claude-status-ctl install-hooks` repairs idempotently |
 | "Claude settings could not be parsed" | `~/.claude/settings.json` is not valid JSON; Claude Status will not edit it. Fix the file, then re-run install. |
 | A session shows "Unknown — Not observed" | Its process is running but it has not fired a hook since Claude Status started watching (idle, or waiting on a background command). It updates on its next prompt, tool call or turn end; no restart needed. `diagnose` lists it as `UNOBSERVED`. Interactive sessions in an untrusted folder hold back all hooks until the trust dialog is accepted. |
-| A session shows "Working — Background" for a long time | Claude Code reported running background tasks at the end of the last response and has not resumed yet. Check the session's Background tasks pane. After 8 h without an event it turns Unknown. |
+| A session shows "Working — Background" for a long time | Claude Code reported running background tasks at the end of the last response and has not resumed yet (the row says when it was reported). Check the session's Background tasks pane. It stays Working — Background while the Claude process runs; confidence drops after an hour; process exit turns it Unknown. |
 | "Background tasks not reported by this Claude Code version" | `Stop` events carry no `background_tasks`; finished responses show as Unknown instead of Complete. Update Claude Code. |
-| Session stuck on Working after pressing Esc | Claude Code emits no hook for an interrupt outside a tool (see README › Known limitations). The next prompt corrects it; otherwise it turns Unknown after 20 min. |
+| Session stuck on Working after pressing Esc or Stop | Claude Code emits no hook for an interrupt (see README › Known limitations). The next prompt corrects it; the row shows "no event for …" after 5 min and turns Unknown after 20 min (Bash running: 11 / 60 min; other tools: 30 min / 2 h). |
+| "Unknown — Possibly interrupted" (Desktop) | The turn was stopped; Claude Code fired no `Stop`, only its internal suggestion agent's event. The next prompt corrects it. |
+| Session stays Waiting after declining with Esc | No event follows an Esc decline; the next prompt corrects it. |
 | Session shows Unknown "process exited" | The Claude process ended without `SessionEnd` (crash/kill). Use Clear Finished. |
 | Login item "requires approval" | System Settings › General › Login Items, or Preferences › Open. |
 | Hook appears slow | `tail ~/Library/Application\ Support/ClaudeStatus/logs/hook.log` shows per-event microseconds. |

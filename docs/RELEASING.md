@@ -8,9 +8,11 @@ archive is traceable to a commit and carries a build-provenance attestation.
 1. Update `VERSION` and `ClaudeStatusVersion.current` (`scripts/build.sh` refuses a mismatch).
 2. Move *Unreleased* notes in `CHANGELOG.md` under `## [x.y.z] — YYYY-MM-DD`. The release
    notes are taken from that section.
-3. Locally: `scripts/test.sh`, plus `python3 scripts/acceptance/cli_acceptance.py` for a real
-   Claude Code session.
-4. Push to `main` and wait for **CI** to pass.
+3. Locally: `scripts/test.sh` (includes the upgrade/rollback test against the previous public
+   release), `python3 scripts/acceptance/cli_acceptance.py` for a real Claude Code session,
+   `python3 scripts/acceptance/soak.py --out soak.jsonl` (31 minutes) for monitoring
+   stability, and `scripts/perf.sh`. Never approve permission prompts from a test harness.
+4. Push a release branch, open a pull request, wait for **CI** to pass, merge to `main`.
 5. Tag and push: `git tag -a vX.Y.Z -m "Claude Status X.Y.Z" && git push origin vX.Y.Z`.
 6. The **Release** workflow (`.github/workflows/release.yml`) checks that the tag matches
    `VERSION`. It runs the unit, integration and installer tests, builds the ad-hoc-signed arm64
@@ -18,6 +20,8 @@ archive is traceable to a commit and carries a build-provenance attestation.
    provenance and creates the GitHub release.
 7. Verify: download the archive, run `shasum -a 256 -c SHA256SUMS.txt` and
    `gh attestation verify ClaudeStatus-X.Y.Z-macos-arm64.zip --repo audiophreak/claude-status`.
+8. Install the published archive locally with `scripts/rollback.sh <zip> --sha256 <sum>` so
+   the installed build is exactly the released one, and run `claude-status-ctl selftest`.
 
 ## Signing and notarization
 

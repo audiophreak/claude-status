@@ -11,3 +11,7 @@ info "integration tests"
 "$REPO_ROOT/scripts/integration-test.sh"
 info "installer round-trip test (isolated HOME)"
 "$REPO_ROOT/scripts/installer-roundtrip-test.sh"
+if [[ "${CLAUDE_STATUS_SKIP_UPGRADE_TEST:-0}" != "1" ]]; then
+  info "upgrade / rollback test (previous public release, isolated HOME)"
+  "$REPO_ROOT/scripts/upgrade-rollback-test.sh"
+fi

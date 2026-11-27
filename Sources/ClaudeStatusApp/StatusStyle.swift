@@ -23,7 +23,8 @@ enum StatusStyle {
 
     static func symbol(_ e: EffectiveSession) -> String { symbol(e.state, activity: e.activity, unobserved: e.unobserved) }
 
-    static func nsColor(_ s: SessionState) -> NSColor {
+    static func nsColor(_ s: SessionState, activity: Activity = .none) -> NSColor {
+        if s == .working && activity == .scheduled { return .systemTeal }
         switch s {
         case .working: return .systemBlue
         case .complete: return .systemGreen
@@ -33,13 +34,13 @@ enum StatusStyle {
         }
     }
 
-    static func color(_ s: SessionState) -> Color { Color(nsColor: nsColor(s)) }
+    static func color(_ s: SessionState, activity: Activity = .none) -> Color { Color(nsColor: nsColor(s, activity: activity)) }
 
     /// Non-template coloured symbol for the menu bar (system colours adapt to light/dark).
     static func menuBarImage(_ s: SessionState, activity: Activity = .none) -> NSImage {
         // Two-colour palette: glyph (primary layer) in white, shape (secondary) in the state
         // colour, so the checkmark / arrows / x / ! remain visible on every state.
-        let palette: [NSColor] = (s == .idle || s == .unknown) ? [nsColor(s)] : [.white, nsColor(s)]
+        let palette: [NSColor] = (s == .idle || s == .unknown) ? [nsColor(s)] : [.white, nsColor(s, activity: activity)]
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
             .applying(NSImage.SymbolConfiguration(paletteColors: palette))
         let base = NSImage(systemSymbolName: symbol(s, activity: activity), accessibilityDescription: "Claude Status: \(s.label)")
@@ -57,9 +58,9 @@ struct StateBadge: View {
     var body: some View {
         Image(systemName: StatusStyle.symbol(state, activity: activity, unobserved: unobserved))
             .symbolRenderingMode(.palette)
-            .foregroundStyle((state == .idle || state == .unknown) ? Color(nsColor: .systemGray) : .white, StatusStyle.color(state))
+            .foregroundStyle((state == .idle || state == .unknown) ? Color(nsColor: .systemGray) : .white, StatusStyle.color(state, activity: activity))
             .font(.system(size: 13, weight: .semibold))
             .frame(width: 18)
-            .accessibilityLabel(state.label)
+            .accessibilityLabel(unobserved ? "Unknown, not observed" : (activity == .scheduled ? "Continuation scheduled" : (activity == .background ? "Working in the background" : state.label)))
     }
 }

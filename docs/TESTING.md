@@ -4,7 +4,7 @@
 `~/.claude/settings.json` or the installed state; destructive and negative cases use unique
 temporary directories.
 
-## Unit tests (`swift test`, 106 tests)
+## Unit tests (`swift test`, 151 tests)
 
 | Suite | Covers |
 |---|---|
@@ -16,6 +16,8 @@ temporary directories.
 | `BackgroundAndDiscoveryTests` | The v1.0.0 defect step by step (foreground turn → background command → Stop with a running task → **Working — Background** → automatic continuation → Working — Continuing → Stop with none → Complete); continuation via `UserPromptSubmit`; Stop without a report → Unknown; cancelled / failed / unknown task statuses; API error with background work; concurrent Desktop background + CLI foreground; three tasks draining one by one; out-of-order Stop; missing continuation → Unknown after 8 h; process exit with background work; restart forgets old tasks; one-shot vs recurring wakeups; unobserved processes listed as Unknown and counted in the aggregate; discovery → observed on the next event without restart (PID + start time, PID reuse, cwd fallback); Clear Finished hides live sessions and never deletes background work; retention never deletes live sessions; health distinguishes coverage gaps, hook failures, unreported background work and genuine inactivity; parser keeps only id/type/status; 1.0.0 records still decode; Desktop/CLI process classification |
 | `HelperInstallerTests`, `ClaudePathsTests` | Helper install modes, idempotence, updates, refusal of missing/symlinked sources; settings path resolution (`CLAUDE_CONFIG_DIR`, `HOME`) |
 | `OrderedJSONTests` | Byte-exact round trip of `JSON.stringify` format, escapes and surrogates, invalid input, depth limit, key order and duplicates |
+| `RemediationV110Tests` | Permission tracking per tool call and thread (parallel tools, subagent requests, background activity, grant, denial by moving on, Esc denial), AskUserQuestion / plan approval through the permission flow, Desktop stop evidence (internal-agent SubagentStop), `/btw` self-correction, interrupt = cancellation not error, Esc silence bounds, Bash-bounded silence, background report provenance ("reported … ago", "at last report"), background subagent evidence, subagent never completing the parent, cron next-fire times, one-shot wakeup time without the prompt, overdue wakeups, scheduled + background overlap, sleep not counted (kernel wake time), concurrent sessions in one folder, PID reuse, PID-less records, restart reconciliation, storage bound, hidden session reappearing, sanitized diagnostic report (no ids, names, paths, e-mail), internal-agent parsing, rollback compatibility of records |
+| `RecordedSequenceTests` | Replays 15 sanitized event sequences recorded live (Desktop and CLI) through the parser and state machine with invariants (never Complete while background work or a wakeup is reported, never Error without `StopFailure`) and the expected labels |
 
 ## Integration tests (`scripts/integration-test.sh`, 65 checks)
 
@@ -48,16 +50,111 @@ hashes the real user's settings file before and after to prove it was not touche
 same code as the in-app buttons (helpers copied from the bundle, hooks registered and preserved,
 idempotent, removal byte-identical).
 
+## Upgrade and rollback (`scripts/upgrade-rollback-test.sh`, 25 checks)
+
+Downloads the previous public release (checksum-verified), installs it in a fake `HOME` with
+its own `--setup-hooks`, records sessions with *its* hook, upgrades with this build's
+`install.sh`, rolls back with `scripts/rollback.sh`, and upgrades again. Checks: settings
+byte-identical throughout (the registration is the same in 1.x), no duplicate registrations,
+unrelated settings preserved, helpers switched in both directions, records readable in both
+directions, a background session still *Working — Background* and a mid-turn session still
+*Working* after the upgrade, the upgraded hook ingesting new events, the self-test, the old
+bundle moved to the Trash, and the real settings file untouched.
+
 ## Real-world acceptance
 
-`python3 scripts/acceptance/cli_acceptance.py` drives a dedicated interactive `claude` CLI
-session in a pseudo-terminal (clean environment, this project folder, `--permission-mode
-default`) and records the states Claude Status observes. See the results table below.
+* `python3 scripts/acceptance/cli_acceptance.py` drives a dedicated interactive `claude` CLI
+  session in a pseudo-terminal through the CLI matrix and checks the labels the installed
+  Claude Status derives (`claude-status-ctl list --json`). It never approves a permission.
+* `python3 scripts/acceptance/soak.py` is the extended-duration test (31 minutes by default,
+  app restart included; see below).
+* Desktop sessions are driven through dedicated, disposable Desktop Code sessions in a
+  throwaway folder whose project settings pre-allow only a harmless test script;
+  `scripts/acceptance/watch_session.py` records the labels Claude Status derives. A test-only
+  probe hook in that folder recorded which events and fields Claude Code emits (names and
+  structure only); the sanitized sequences are in `Tests/Fixtures/recorded/`.
 
-Desktop acceptance used this project's own Desktop Code session (started before installation
-and picked up live) and an isolated one-reply Desktop Code session.
+## Results — v1.1.0 (2026-11-27, macOS 27.2, Apple silicon; Claude Code CLI 2.1.325; Claude Desktop with bundled Claude Code 2.1.330)
 
-## Results — v1.0.1 / v1.0.2 (2026-11-26, macOS 27.2, Claude Code CLI 2.1.325, Claude Desktop with bundled Claude Code 2.1.330)
+### Automated
+
+| Suite | Result |
+|---|---|
+| Unit tests (`swift test`) | **151 / 151** passed (45 new: `RemediationV110Tests` 33, `RecordedSequenceTests` 12 replaying 15 recorded Desktop/CLI sequences) |
+| Integration (`scripts/integration-test.sh`) | **65 / 65** |
+| Installer round trip | **24 / 24** |
+| Upgrade 1.0.2 → 1.1.0 → rollback → upgrade (`scripts/upgrade-rollback-test.sh`) | **25 / 25** |
+| Installed hook self-test (`claude-status-ctl selftest`) | **12 / 12** |
+| Static analysis (shellcheck, Python compile, JSON fixtures), gitleaks (tree + full history) | clean |
+
+### Compatibility matrix (v1.1.0)
+
+VERIFIED = exercised live against a real client with the installed 1.1.0 (or, where noted,
+recorded live and replayed through the 1.1.0 state machine); PARTIAL = part of the scenario
+cannot be exercised or is not reported by Claude Code; NOT TESTED = not run.
+
+| Scenario | Desktop (Code tab, 2.1.330) | CLI (2.1.325) |
+|---|---|---|
+| Foreground working and completion | VERIFIED | VERIFIED |
+| Background shell execution | VERIFIED | VERIFIED |
+| Multiple background tasks | VERIFIED — 2 → Continuing → 1 → Continuing → Complete | VERIFIED — same |
+| Automatic continuation | VERIFIED (`UserPromptSubmit`, shown *Working — Continuing*) | VERIFIED |
+| Background task failure (`exit 3`) | VERIFIED | VERIFIED |
+| Background task cancellation (`TaskStop`) | VERIFIED (same turn; recorded + replayed) | VERIFIED (next turn) |
+| Foreground cancellation | PARTIAL — Stop button: no `Stop` event; internal-agent `SubagentStop` in 3 of 4 runs → *Unknown — Possibly interrupted*; otherwise time-bounded | PARTIAL — Esc fires no event during a tool or text; *Working* until the next prompt or the time bound (verified) |
+| Background subagents | VERIFIED (incl. "subagent active" evidence) | VERIFIED (incl. two concurrent) |
+| Background monitor | VERIFIED (type `monitor`) | VERIFIED (reported as `shell`) |
+| Scheduled continuation (one-shot) | VERIFIED — *Continuation scheduled — continues at 11:43* → fired → Complete; cancellation with `CronDelete` | VERIFIED — same, incl. cancellation |
+| Permission requests | PARTIAL — request → *Waiting — Approval required*; approval by a person → Working → Complete (recorded on the 1.0.2 install, replayed through 1.1.0); denial from the Desktop UI not exercised (the harness never answers prompts) | PARTIAL — request → Waiting; decline with Esc (no event, stays Waiting, next prompt resolves) verified; approval not exercised (never approved by the harness) |
+| User-input requests (`AskUserQuestion`) | PARTIAL — *Waiting — Question for you* verified; answering from the Desktop UI not exercised | VERIFIED — answer → Working → Complete; cancel with Esc (no event) |
+| Multiple concurrent sessions | VERIFIED (3 fixtures + 5 other sessions) | VERIFIED (two sessions in one folder, separate rows) |
+| Existing session discovery | VERIFIED — sessions running before the upgrade/restart listed with their state; a Desktop process with no event listed as *Unknown — Not observed* | VERIFIED |
+| Application restart and recovery | VERIFIED — SIGKILL + relaunch during the soak, states identical | VERIFIED — same |
+| Clear Finished and retention | VERIFIED — see below | VERIFIED |
+| Extended-duration monitoring | VERIFIED — 24-minute background task during the soak | VERIFIED — 31-minute soak |
+| MCP elicitation, agent teams | NOT TESTED | NOT TESTED |
+
+### CLI acceptance (`cli_acceptance.py`, installed 1.1.0): **31 passed, 0 failed, 0 skipped**
+
+basic (3), permission request / decline / next prompt / declined tool did not run (4),
+question answer and cancel (3), two background tasks with one failing (4), background
+cancellation (2), background subagent (2), monitor (2), scheduled wakeup with time, firing and
+cancellation (3), Esc during a tool (2), Esc during text (2), two concurrent sessions in one
+folder + SIGKILL mid-turn → *Unknown (process exited)* (3), `/exit` → ended (1).
+
+### Desktop acceptance (dedicated sessions, installed 1.1.0)
+
+| Scenario | Labels derived by Claude Status (live) |
+|---|---|
+| Two background tasks, one failing | Working → Working — Background (2) → Working — Continuing → Working — Background (1) → Working — Continuing → Complete |
+| Stop during a foreground Bash call | Working — Running tool; no event followed (this run) → time-bounded (partial after 11 min) |
+| Background subagent | Working — Background (subagent) → "subagent active" → Working — Continuing → Complete |
+| Scheduled one-shot wakeup | Continuation scheduled — "Claude continues at 11:43" → (11:43:01) Working — Continuing → Complete |
+| Monitor | Working — Background (monitor) → Working — Continuing → Complete |
+| Stop during text generation | Working → Unknown — Possibly interrupted (1 s after the internal-agent event) |
+| AskUserQuestion | Waiting — Question for you (kept after `permission_prompt`) |
+
+Earlier runs in the same session (recorded, replayed by `RecordedSequenceTests`): background
+cancellation in the same turn, schedule cancellation, Stop during a tool followed by the
+internal-agent event, approval granted by a person while a background task ran.
+
+### Extended-duration monitoring (`soak.py`, installed 1.1.0)
+
+SOAK_RESULTS
+
+### Upgrade on the real system (1.0.2 → 1.1.0, eight Claude sessions running)
+
+`scripts/install.sh --skip-build`: `~/.claude/settings.json` SHA-256 unchanged
+(`c446e458…`), hooks healthy (12 events, no duplicates), helpers replaced atomically while
+sessions ran, preferences unchanged (none customised), app 1.1.0 arm64, self-test 12/12;
+every running session kept its state (including a long-running Desktop session that showed
+*Working — Background · reported 20m ago* immediately).
+
+### Measurements (Apple silicon, release build) — compared with 1.0.2
+
+MEASUREMENTS
+
+## Results — v1.0.1 / v1.0.2 (historical) (2026-11-26, macOS 27.2, Claude Code CLI 2.1.325, Claude Desktop with bundled Claude Code 2.1.330)
 
 ### Automated
 
