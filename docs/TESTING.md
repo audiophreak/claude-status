@@ -189,7 +189,36 @@ every running session kept its state (including a long-running Desktop session t
 
 ### Measurements (Apple silicon, release build) — compared with 1.0.2
 
-MEASUREMENTS
+Same harness, same machine, run side by side (`scripts/perf.sh --idle-seconds 300`, isolated
+instance with 50 sessions; `--bundle` pointed at the published, checksum-verified 1.0.2 app):
+
+| Metric | 1.0.2 | 1.1.0 |
+|---|---|---|
+| App idle CPU (300 s window, incl. the periodic process scan) | 0.040 % | **0.040 %** |
+| App memory (physical footprint) | 20 MB | **19 MB** |
+| Event → indicator (hook start to published state, 20 events) | median 71 ms | **median 71 ms**, max 77 ms |
+| Hook, process spawn to exit (200 runs, from Python) | median 6.2 ms | **median 6.3 ms**, p95 7.3 ms |
+| App start-up to first published state (50 sessions) | 245 ms | 106–356 ms (three runs) |
+| Session record | 427–646 bytes | 474–725 bytes |
+| Bundle (arm64) | 2.8 MB | 3.3 MB |
+
+Installed app on the real system (Desktop + CLI sessions running): hook internal processing
+over 418 real events median 1.3 ms, p95 2.7 ms, max 7.4 ms, 0 failures; a quiet 60 s window
+0.067 % CPU; a 10-minute window with live sessions 0.18 % average, 28 MB footprint. Runtime
+storage is bounded: at most 200 records (< 1 KB each) and a hook log of 2 × 256 KB.
+
+Regressions found and fixed during this validation (both measured on the installed app):
+1. 1.1.0 development builds republished the session list on every refresh because raw
+   seconds were part of session equality (0.66 % CPU during active monitoring) — fixed,
+   regression test added.
+2. Present since 1.0.0: after the dashboard had been opened once, its one-second timer kept
+   redrawing the hidden panel (sampling showed `DashboardView` / `SessionRow` updates with no
+   window on screen; 0.57 % → 0.18 % average after the fix, 0.067 % in a quiet minute). The
+   fix follows the panel window's occlusion state; it was verified by measurement and
+   sampling, not by an automated UI test.
+
+One isolated run measured 0.257 % / 55 MB once; it did not reproduce in four further runs and
+is reported here for completeness.
 
 ## Results — v1.0.1 / v1.0.2 (historical) (2026-11-26, macOS 27.2, Claude Code CLI 2.1.325, Claude Desktop with bundled Claude Code 2.1.330)
 

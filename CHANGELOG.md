@@ -33,6 +33,10 @@ field or by event sequences recorded live from Claude Code Desktop 2.1.330 and C
 - **Sleep counted as silence in `claude-status-ctl`.** Staleness now uses the kernel wake time
   (`kern.waketime`) in the CLI as well as in the app, and the app rescans processes on wake.
 - A record without a PID no longer absorbs a newer process in the same folder.
+- **Idle CPU after opening the dashboard** (present since 1.0.0): the menu bar panel kept
+  redrawing every second after it was closed, because SwiftUI's `onDisappear` does not
+  reliably fire for it (measured about 0.5 % CPU). The live timers now follow the panel
+  window's occlusion state.
 - The 1.0.x CLI acceptance driver approved its own test session's permission prompts; it now
   only declines them.
 

@@ -4,19 +4,21 @@
 #   hook latency (process start to exit, N runs), event-to-indicator latency (hook run to the
 #   app's published state), app startup to first published state, idle CPU and memory of the
 #   app with M sessions over a window, bundle size, bytes per session record.
-# usage: scripts/perf.sh [--runs 200] [--sessions 50] [--idle-seconds 120]
+# usage: scripts/perf.sh [--runs 200] [--sessions 50] [--idle-seconds 120] [--bundle PATH.app]
+#        (--bundle measures another build, e.g. a previous release, the same way)
 source "$(dirname "$0")/lib.sh"
 cd "$REPO_ROOT" || exit 1
-[[ -d "$APP_BUNDLE" ]] || "$REPO_ROOT/scripts/build.sh" >/dev/null
 RUNS=200 SESSIONS=50 IDLE=120
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --runs) RUNS="$2"; shift 2 ;;
     --sessions) SESSIONS="$2"; shift 2 ;;
     --idle-seconds) IDLE="$2"; shift 2 ;;
+    --bundle) APP_BUNDLE="$2"; shift 2 ;;
     *) die "unknown option $1" ;;
   esac
 done
+[[ -d "$APP_BUNDLE" ]] || "$REPO_ROOT/scripts/build.sh" >/dev/null
 HOOK="$APP_BUNDLE/Contents/Helpers/claude-status-hook"
 APPBIN="$APP_BUNDLE/Contents/MacOS/ClaudeStatus"
 W="$(mktemp -d "${TMPDIR:-/tmp}/claude-status-perf.XXXXXX")"

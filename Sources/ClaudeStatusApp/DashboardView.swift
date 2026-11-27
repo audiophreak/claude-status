@@ -83,6 +83,16 @@ struct DashboardView: View {
             footer
         }
         .frame(width: 380)
+        // `onDisappear` does not reliably fire when the menu bar panel closes; without this the
+        // hidden dashboard kept redrawing every second (measured ~0.5 % CPU after first open).
+        .background(WindowVisibilityReader { isVisible in
+            guard isVisible != visible else { return }
+            visible = isVisible
+            if isVisible {
+                model.reload()
+                model.refreshHealth()
+            }
+        })
         .onAppear {
             visible = true
             model.reload()
@@ -205,5 +215,45 @@ struct SessionRow: View {
     private func abbreviate(_ p: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return p.hasPrefix(home) ? "~" + p.dropFirst(home.count) : p
+    }
+}
+
+
+/// Reports whether the hosting window is actually on screen (occlusion state), so periodic
+/// redraws stop while the menu bar panel is closed.
+struct WindowVisibilityReader: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let v = ReaderView()
+        v.onChange = onChange
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ReaderView)?.onChange = onChange
+    }
+
+    final class ReaderView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let o = observer { NotificationCenter.default.removeObserver(o); observer = nil }
+            guard let w = window else { report(false); return }
+            observer = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
+                                                              object: w, queue: .main) { [weak self] _ in
+                self?.report(w.occlusionState.contains(.visible) && w.isVisible)
+            }
+            report(w.occlusionState.contains(.visible) && w.isVisible)
+        }
+
+        private func report(_ visible: Bool) {
+            let cb = onChange
+            DispatchQueue.main.async { cb?(visible) }
+        }
+
+        deinit { if let o = observer { NotificationCenter.default.removeObserver(o) } }
     }
 }
