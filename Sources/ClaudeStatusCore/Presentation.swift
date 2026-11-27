@@ -153,6 +153,18 @@ public struct EffectiveSession: Equatable, Sendable, Identifiable {
             || ((state == .working || state == .waiting) && record.activeBackground?.isEmpty == false)
     }
 
+    /// Equality ignores the raw time values (`silence`, `backgroundReportAge`), which change on
+    /// every evaluation: everything displayed from them is captured in `detail` /
+    /// `confidenceNote` at minute granularity. Otherwise every refresh would republish the
+    /// session list and re-render the menu bar (measured: ~0.7 % CPU instead of < 0.1 %).
+    public static func == (a: EffectiveSession, b: EffectiveSession) -> Bool {
+        a.record == b.record && a.state == b.state && a.activity == b.activity && a.confidence == b.confidence
+            && a.detail == b.detail && a.processExited == b.processExited && a.stale == b.stale && a.ended == b.ended
+            && a.unobserved == b.unobserved && a.dismissed == b.dismissed && a.backgroundActive == b.backgroundActive
+            && a.backgroundReportPredatesTurn == b.backgroundReportPredatesTurn && a.confidenceNote == b.confidenceNote
+            && a.wakeupDueAt == b.wakeupDueAt && a.backgroundSummary == b.backgroundSummary
+    }
+
     /// Multi-line explanation for the row's tooltip: what is known, from which evidence.
     public func evidenceSummary(now: Double) -> String {
         if unobserved {
@@ -161,7 +173,7 @@ public struct EffectiveSession: Equatable, Sendable, Identifiable {
         var lines: [String] = []
         lines.append("Foreground: \(foregroundSummary)")
         lines.append("Background: \(backgroundSummary)")
-        lines.append("Last event: \(record.lastEventName.isEmpty ? "none" : record.lastEventName), \(Format.ago(silence))")
+        lines.append("Last event: \(record.lastEventName.isEmpty ? "none" : record.lastEventName), \(Format.ago(now - record.lastEventAt))")
         let conf: String
         switch confidence {
         case .confirmed: conf = "confirmed by hook events"

@@ -442,6 +442,19 @@ final class RemediationV110Tests: TempDirTestCase {
         XCTAssertNil(DiagnosticReport.clientVersion(fromExecutable: "/usr/local/bin/claude"))
     }
 
+    // MARK: Performance guard
+
+    func testReevaluationWithoutVisibleChangeIsEqual() {
+        // The app republishes (and SwiftUI re-renders) only when a session compares unequal;
+        // raw seconds must not make every refresh a change.
+        let r = apply(start + [ev(.userPromptSubmit, t: 1), bgStop(5, [shellA])])
+        XCTAssertEqual(view(r, now: 100), view(r, now: 105))
+        XCTAssertEqual(view(r, now: 130), view(r, now: 170), "same minute of report age")
+        XCTAssertNotEqual(view(r, now: 100), view(r, now: 200), "displayed age changed from 1m to 3m")
+        let w = apply(start + [ev(.userPromptSubmit, t: 1)])
+        XCTAssertEqual(view(w, now: 10), view(w, now: 40))
+    }
+
     // MARK: Parser
 
     func testInternalAgentFlagParsedFromEmptyAgentType() throws {
