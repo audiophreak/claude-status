@@ -130,7 +130,7 @@ final class BackgroundAndDiscoveryTests: TempDirTestCase {
     func testMultipleBackgroundTasksDrainOneByOne() {
         var r = apply([ev(.userPromptSubmit, t: 1), stop(5, [shellA, shellB, agent])])
         XCTAssertEqual(view(r).backgroundActive, 3)
-        XCTAssertEqual(view(r).detail, "3 background tasks running (2 shell, subagent)")
+        XCTAssertEqual(view(r).detail, "3 background tasks (2 shell, subagent) running")
         r = apply([ev(.preToolUse, t: 40, tool: "Bash", toolUseId: "1"), ev(.postToolUse, t: 41, tool: "Bash", toolUseId: "1"),
                    stop(45, [shellB, agent])], from: r)
         XCTAssertEqual(view(r).activity, .background)
@@ -150,13 +150,22 @@ final class BackgroundAndDiscoveryTests: TempDirTestCase {
         XCTAssertEqual(r.ignoredOutOfOrder, 1)
     }
 
-    func testMissingContinuationEventsEventuallyBecomeUnknownNeverComplete() {
-        let r = apply([ev(.userPromptSubmit, t: 1), stop(5, [shellA])])
-        XCTAssertEqual(view(r, now: 5 + 3 * 3600).state, .working, "long background commands are normal")
+    func testLongSilenceLowersConfidenceButNeverCompletesBackgroundWork() {
+        // No event fires while a background task runs; silence is not evidence of completion
+        // and not of failure. While the process runs, the work stays Working — Background with
+        // an explicit report age; confidence drops after an hour. Process exit resolves it.
+        let r = apply([ev(.sessionStart, t: 0, source: "startup"), ev(.userPromptSubmit, t: 1), stop(5, [shellA])])
+        let early = view(r, now: 5 + 600)
+        XCTAssertEqual(early.state, .working)
+        XCTAssertEqual(early.confidence, .confirmed)
+        XCTAssertTrue(early.backgroundSummary.contains("reported 10m ago"), early.backgroundSummary)
         let v = view(r, now: 5 + 9 * 3600)
-        XCTAssertEqual(v.state, .unknown)
-        XCTAssertTrue(v.stale)
+        XCTAssertEqual(v.state, .working)
+        XCTAssertEqual(v.activity, .background)
+        XCTAssertEqual(v.confidence, .partial)
+        XCTAssertTrue(v.detail.contains("reported 9h ago"), v.detail)
         XCTAssertNotEqual(v.state, .complete)
+        XCTAssertEqual(view(r, now: 5 + 9 * 3600, alive: false).state, .unknown)
     }
 
     func testProcessExitWhileBackgroundReportedIsUnknown() {
@@ -186,7 +195,7 @@ final class BackgroundAndDiscoveryTests: TempDirTestCase {
         XCTAssertEqual(v.confidence, .partial)
         XCTAssertEqual(v.label, "Working — Background")
         XCTAssertTrue(v.detail.hasSuffix("foreground not yet observed"))
-        XCTAssertEqual(view(r, now: 100 + 9 * 3600).state, .unknown, "still subject to the 8 h limit")
+        XCTAssertEqual(view(r, now: 100 + 9 * 3600).confidence, .partial, "old reports lower confidence")
         XCTAssertEqual(view(apply([stop(100, [], agentId: "a1", name: .subagentStop)])).state, .unknown,
                        "no background work and no foreground evidence stays Unknown")
     }
@@ -235,7 +244,7 @@ final class BackgroundAndDiscoveryTests: TempDirTestCase {
         let reused = DetectedProcess(pid: 4242, startTime: 900, client: .cli, cwd: "/tmp")
         XCTAssertEqual(Presentation.unobservedProcesses([reused], records: [r]).count, 1)
         // A record without PID is matched by working directory.
-        var nopid = SessionRecord(sessionId: "np", timestamp: 1); nopid.cwd = "/Users/demo/Code/acme-web"
+        var nopid = SessionRecord(sessionId: "np", timestamp: 500); nopid.cwd = "/Users/demo/Code/acme-web"
         XCTAssertTrue(Presentation.unobservedProcesses([p], records: [nopid]).isEmpty)
     }
 

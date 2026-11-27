@@ -107,6 +107,14 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var background: [BackgroundTaskInfo]?
     /// When `background` was last reported.
     public var backgroundReportedAt: Double?
+    /// Last time a subagent hook event (documented `agent_id`) arrived while the foreground
+    /// turn was not running: direct evidence that background subagent work is in progress.
+    public var backgroundActivityAt: Double?
+    /// Tool calls (by `tool_use_id`) for which a permission decision was requested and not yet
+    /// resolved. `"?"` stands for a request that could not be matched to a tool call.
+    public var awaitingPermission: [String]?
+    /// Tool names of in-flight tool calls, keyed by `tool_use_id` (names only, never input).
+    public var inFlightToolNames: [String: String]?
     /// Session-scoped scheduled wakeups at the last report. nil = not reported.
     public var schedules: ScheduleCounts?
     /// Hidden by "Clear Finished" while its Claude process is still running. Any new event

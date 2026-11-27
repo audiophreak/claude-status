@@ -115,6 +115,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 self?.lastWake = Date().timeIntervalSince1970
                 self?.livenessCache.removeAll()
+                self?.processesScannedAt = 0
                 self?.watcher?.start()
                 self?.reload()
                 self?.refreshHealth()
@@ -172,7 +173,8 @@ final class AppModel: ObservableObject {
     private func evaluate() {
         let now = Date().timeIntervalSince1970
         scanProcessesIfDue(now: now)
-        var evaluated = records.map { Presentation.evaluate($0, now: now, alive: alive($0, now: now), lastWake: lastWake) }
+        let wake = SystemClock.effectiveWake(observed: lastWake)
+        var evaluated = records.map { Presentation.evaluate($0, now: now, alive: alive($0, now: now), lastWake: wake) }
         // Detected Claude sessions without any hook event yet are shown, as Unknown.
         let unobserved = Presentation.unobservedProcesses(processes, records: records)
         evaluated += Presentation.unobservedSessions(unobserved, now: now) { [weak self] in self?.projectInfo($0) }
@@ -317,7 +319,8 @@ final class AppModel: ObservableObject {
     /// they stay correlated with their process and are never reported as unobserved.
     private func cleanup(retention: Double?) {
         let now = Date().timeIntervalSince1970
-        _ = SessionMaintenance.cleanup(store: store, now: now, retention: retention, lastWake: lastWake) { [weak self] r in
+        _ = SessionMaintenance.cleanup(store: store, now: now, retention: retention,
+                                       lastWake: SystemClock.effectiveWake(observed: lastWake)) { [weak self] r in
             self?.alive(r, now: now)
         }
     }

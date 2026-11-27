@@ -69,6 +69,29 @@ enum SelfTest {
         r = send(["hook_event_name": "Stop"])
         check("Stop without background report -> Unknown (never assumed complete)", state()?.state == .unknown)
 
+        // Approval request: Waiting until that tool call is answered.
+        _ = send(["hook_event_name": "UserPromptSubmit", "prompt": secret])
+        _ = send(["hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "t2", "tool_input": ["command": secret]])
+        _ = send(["hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": ["command": secret]])
+        check("permission request -> Waiting (approval required)", state().map { $0.state == .waiting && $0.record.reason == .permission } ?? false)
+        _ = send(["hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t2", "tool_response": secret])
+        check("approved tool finishes -> Working", state()?.state == .working)
+
+        // Interrupt evidence: the internal prompt-suggestion agent's SubagentStop mid-turn.
+        _ = send(["hook_event_name": "SubagentStop", "agent_id": "internal-1", "agent_type": "", "background_tasks": [],
+                  "session_crons": [], "last_assistant_message": secret])
+        check("turn ended without Stop -> Unknown — Possibly interrupted (never Complete)",
+              state().map { $0.state == .unknown && $0.label == "Unknown — Possibly interrupted" } ?? false)
+
+        // Scheduled one-shot wakeup with a due time (only the schedule expression is read).
+        let due = Date().addingTimeInterval(900)
+        let c = Calendar.current.dateComponents([.minute, .hour, .day, .month], from: due)
+        _ = send(["hook_event_name": "UserPromptSubmit", "prompt": secret])
+        _ = send(["hook_event_name": "Stop", "background_tasks": [],
+                  "session_crons": [["id": "w1", "schedule": "\(c.minute!) \(c.hour!) \(c.day!) \(c.month!) *", "recurring": false, "prompt": secret]]])
+        check("one-shot wakeup -> Continuation scheduled with its due time",
+              state().map { $0.label == "Continuation scheduled" && $0.wakeupDueAt != nil } ?? false)
+
         let file = paths.sessionFile(sid)
         let bytes = (try? Data(contentsOf: file)) ?? Data()
         check("record stores no prompt, message, command or description",

@@ -1,0 +1,23 @@
+{
+ "client": "desktop",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 2.16,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 13.83,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ]
+}

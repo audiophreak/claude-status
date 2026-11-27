@@ -37,19 +37,28 @@ decision, add context, or make Claude continue.
 
 Stored per session: identifiers, timestamps, state, working directory, project / git
 repository / worktree name, client type, Claude PID and start time, opaque in-flight
-tool-use IDs, counts, in-flight background tasks (opaque task ID, type label such as `shell`,
-and status only), scheduled-wakeup counts, and the documented enum values listed in
-`docs/ARCHITECTURE.md`. Never stored: prompts, responses, tool names, tool inputs or outputs,
-background-task descriptions or command lines, scheduled-task prompts, transcript paths,
-session titles, error details, credentials or any other Claude configuration.
+tool-use IDs with their tool names (for example `Bash`; needed to match permission requests),
+counts, in-flight background tasks (opaque task ID, type label such as `shell`, and status
+only), scheduled-wakeup counts and the next one-shot time computed from the cron expression,
+and the documented enum values listed in `docs/ARCHITECTURE.md`. Never stored: prompts,
+responses, tool inputs or outputs, background-task descriptions or command lines,
+scheduled-task prompts, transcript paths, session titles, error details, credentials or any
+other Claude configuration.
 
 To list running sessions that have not sent an event, the app reads, for same-user processes
 named `claude`, the executable path, parent processes, start time and working directory through
 libproc. This is held in memory only, never written to disk, and no other process data (such as
 arguments or environment) is read. Claude Code's own files (transcripts, `~/.claude/sessions`)
 are not read. The hook log
-contains event names, 8-character session-ID prefixes, results, timings and, for `Stop` /
-`SubagentStop`, background-task counts with type labels and statuses only.
+contains event names, 8-character session-ID prefixes, results, timings and type labels only
+(background-task counts with type labels and statuses, notification type, interrupt flag,
+internal-agent flag, wakeup time).
+
+`claude-status-ctl report` (for bug reports) numbers sessions instead of listing their IDs,
+replaces project names with "project N", reports Claude Code versions as numbers only and
+summarizes the hook log per event type; a final pass removes anything path-, UUID-, long-hex-
+or e-mail-shaped and the user's name and home directory. Unit tests feed it records with
+private names, paths and IDs and assert that none appears.
 
 ## Filesystem safety
 
@@ -59,6 +68,22 @@ contains event names, 8-character session-ID prefixes, results, timings and, for
   `rename(2)`.
 * All writers serialise on an advisory `flock`, with a 1 s bounded wait (fail open).
 * Scripts delete only exact, expected paths; app bundles are moved to the Trash.
+* Session record count is bounded (200); the hook log rotates at 256 KB; hook input is read up
+  to 4 MB and parsed by a prefix scan beyond that; background-task and schedule arrays are
+  capped.
+* Process identity is PID **and** start time everywhere (PID reuse never matches).
+
+## Security review (1.1.0)
+
+Reviewed for this release: untrusted input (hook payloads are size-bounded and validated
+field by field; cron expressions are parsed by a bounded parser with a 400-day search limit;
+nothing is executed or passed to a shell), filesystem permissions and symlinks (`O_NOFOLLOW`,
+0600/0700, exact-path deletes), race conditions (single `flock`, re-read under the lock for
+cleanup, atomic `rename(2)`), PID reuse, resource exhaustion (bounds above), malformed /
+duplicate / out-of-order events (unit-tested), logging privacy (labels only; sanitized
+report), command injection (scripts quote all paths, never `eval` input), temporary files
+(`mktemp`, removed by exact prefix), and installation/update integrity (signature, arch and
+bundle-id checks in `rollback.sh`; checksum and provenance for releases).
 
 ## Settings modification safeguards
 
@@ -73,7 +98,11 @@ overwritten. Claude Code writes this file rarely, and every edit leaves a backup
 
 Release archives are built by the GitHub Actions *Release* workflow from a tagged commit, signed
 **ad-hoc** (no Apple Developer ID), with the hardened runtime and no entitlements, and are **not
-notarized**. Each archive has a SHA-256 checksum and a GitHub build-provenance attestation
+notarized**. As of 1.1.0 the maintainer has no Developer ID certificate or notarization
+credentials (checked: no valid code-signing identity in the keychain, no `notarytool`
+profile), and none will be bought without a decision to do so. Users who do not want to
+approve an unnotarized download can build from source (no approval needed); Gatekeeper must
+never be disabled. Each archive has a SHA-256 checksum and a GitHub build-provenance attestation
 (`gh attestation verify <zip> --repo audiophreak/claude-status`). Local builds use a local Apple
 Development identity if one exists, otherwise ad-hoc signing.
 

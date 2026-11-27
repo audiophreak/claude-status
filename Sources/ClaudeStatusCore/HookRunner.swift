@@ -34,10 +34,20 @@ public enum HookRunner {
         public var evidence: String = ""
     }
 
-    /// `bg=2(shell:running,subagent:running) wake=1` for Stop / SubagentStop; `bg=?` when the
-    /// documented `background_tasks` array was absent. Only type labels and statuses.
+    /// `bg=2(shell:running,subagent:running) wake=1@14:05` for Stop / SubagentStop; `bg=?` when
+    /// the documented `background_tasks` array was absent; `n=<type>` for notifications;
+    /// `interrupt` for aborted tools; `agent` / `agent=internal`. Type labels and statuses only.
     public static func evidence(_ e: HookEvent) -> String {
-        guard e.name == .stop || e.name == .subagentStop else { return "" }
+        switch e.name {
+        case .notification:
+            return e.notificationType.map { "n=\($0)" } ?? ""
+        case .postToolUseFailure:
+            return e.isInterrupt ? "interrupt" : ""
+        case .stop, .subagentStop:
+            break
+        default:
+            return ""
+        }
         var out: String
         if let tasks = e.backgroundTasks {
             out = "bg=\(tasks.count)"
@@ -48,8 +58,10 @@ public enum HookRunner {
         } else {
             out = "bg=?"
         }
-        if let sc = e.schedules { out += " wake=\(sc.oneShot) cron=\(sc.recurring)" }
-        if e.agentId != nil { out += " agent" }
+        if let sc = e.schedules {
+            out += " wake=\(sc.oneShot)\(sc.nextOneShotAt.map { "@" + Format.timeOfDay($0) } ?? "") cron=\(sc.recurring)"
+        }
+        if e.isInternalAgent { out += " agent=internal" } else if e.agentId != nil { out += " agent" }
         return out
     }
 

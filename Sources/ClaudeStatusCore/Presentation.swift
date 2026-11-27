@@ -1,14 +1,36 @@
 import Foundation
 
 /// Time-dependent interpretation of stored records. Pure, so it is unit-testable.
+///
+/// Claude Code fires no hook event when a response is interrupted with Esc, while a tool or
+/// a response simply takes long, or when a background task exits. Silence is therefore never
+/// evidence of completion. The thresholds below only lower *confidence* and, past the outer
+/// limit, change a foreground turn to Unknown — never to Complete, Idle or Error.
+/// * A single response without any tool call is bounded by the model's output limit, so
+///   20 minutes without an event while no tool runs is far beyond a normal response.
+/// * A foreground Bash call is bounded by its timeout (at most 10 minutes unless the user
+///   raised `BASH_MAX_TIMEOUT_MS`): confidence drops after 11 minutes, Unknown after 60.
+///   MCP and other tools may run longer, so other tools in flight tolerate two hours.
+/// * Background work has no such bound (servers, monitors, long rehearsals). While its Claude
+///   process runs, reported background work stays Working — Background with an explicit
+///   "reported … ago"; confidence drops after an hour. Process exit resolves it.
+/// Time the Mac spent asleep is excluded (see `SystemClock`).
 public struct PresentationPolicy: Sendable, Equatable {
+    /// Working with no event for this long while no tool is executing -> lower confidence.
+    public var quietAfterNoToolSeconds: Double = 5 * 60
     /// Working with no event for this long while no tool is executing -> Unknown (stale).
     public var staleAfterNoToolSeconds: Double = 20 * 60
+    /// Working with a tool in flight: lower confidence after this long without an event.
+    public var quietAfterToolSeconds: Double = 30 * 60
     /// Working with a tool in flight (long builds, tests) tolerates a longer silence.
     public var staleAfterToolSeconds: Double = 120 * 60
-    /// Background work reported by Claude Code with no later event for this long -> Unknown.
-    /// Background commands (builds, rehearsals, test suites) legitimately run for hours.
-    public var staleAfterBackgroundSeconds: Double = 8 * 3600
+    /// Only Bash calls in flight: bounded by the Bash timeout (10 min maximum by default).
+    public var quietAfterBashSeconds: Double = 11 * 60
+    public var staleAfterBashSeconds: Double = 60 * 60
+    /// A background report older than this is shown with partial confidence.
+    public var backgroundReportAgingSeconds: Double = 60 * 60
+    /// A one-shot wakeup this far past its due time without an event is flagged.
+    public var wakeupOverdueSeconds: Double = 5 * 60
     public init() {}
 }
 
@@ -49,6 +71,17 @@ public struct EffectiveSession: Equatable, Sendable, Identifiable {
     public var dismissed: Bool = false
     /// Active background tasks at the last report; nil = not reported.
     public var backgroundActive: Int?
+    /// Seconds since the last hook event, excluding time the Mac was asleep.
+    public var silence: Double = 0
+    /// Age of the background report (nil = never reported).
+    public var backgroundReportAge: Double?
+    /// The foreground turn started after the background report, so the report may be out of
+    /// date until this turn ends (Claude Code re-reports background work at every Stop).
+    public var backgroundReportPredatesTurn = false
+    /// Why confidence is not `confirmed` (empty when it is).
+    public var confidenceNote: String = ""
+    /// When a pending one-shot wakeup is due (nil = none or unknown).
+    public var wakeupDueAt: Double?
 
     public init(record: SessionRecord, state: SessionState, detail: String, processExited: Bool = false,
                 stale: Bool = false, ended: Bool = false) {
@@ -61,8 +94,10 @@ public struct EffectiveSession: Equatable, Sendable, Identifiable {
         if unobserved { return "Unknown — Not observed" }
         switch (state, activity) {
         case (.working, .background): return "Working — Background"
-        case (.working, .scheduled): return "Working — Continuation scheduled"
+        case (.working, .scheduled): return "Continuation scheduled"
         case (.working, _) where record.reason == .autoContinued: return "Working — Continuing"
+        case (.idle, _) where record.reason == .interrupted && !ended: return "Idle — Interrupted"
+        case (.unknown, _) where record.reason == .interrupted && !ended && !processExited && !stale: return "Unknown — Possibly interrupted"
         default: return state.label
         }
     }
@@ -76,31 +111,66 @@ public struct EffectiveSession: Equatable, Sendable, Identifiable {
         case .waiting: return "Waiting for you"
         case .complete: return "Response finished"
         case .error: return record.reason == .interrupted ? "Interrupted" : "Ended with an API error"
-        case .idle: return "No prompt yet"
-        case .unknown: return "Not yet observed"
+        case .idle:
+            switch record.reason {
+            case .interrupted: return "Interrupted"
+            case .idleInput: return "Ended without a completion event"
+            default: return "No prompt yet"
+            }
+        case .unknown: return record.reason == .interrupted ? "Possibly interrupted" : "Not yet observed"
         }
     }
 
-    /// Background work, independently of the foreground turn.
+    /// Background work, independently of the foreground turn. Counts are always the last
+    /// report: Claude Code fires no event when an individual background task exits.
     public var backgroundSummary: String {
         if unobserved { return "Unknown" }
         guard let tasks = record.activeBackground else { return "Not reported" }
         var parts: [String] = []
         if !tasks.isEmpty {
             let types = Presentation.typeSummary(tasks)
-            parts.append("\(tasks.count) task\(tasks.count == 1 ? "" : "s") running (\(types))")
+            parts.append("\(tasks.count) task\(tasks.count == 1 ? "" : "s") (\(types))")
         }
         if let sc = record.schedules, sc.oneShot > 0 {
-            parts.append("\(sc.oneShot) wakeup\(sc.oneShot == 1 ? "" : "s") scheduled")
+            var w = "\(sc.oneShot) wakeup\(sc.oneShot == 1 ? "" : "s") scheduled"
+            if let due = wakeupDueAt { w += " for \(Format.timeOfDay(due))" }
+            parts.append(w)
         }
-        return parts.isEmpty ? "None" : parts.joined(separator: " · ")
+        if parts.isEmpty { return "None" }
+        var out = parts.joined(separator: " · ")
+        if backgroundReportPredatesTurn {
+            out += " at last report · updated when this turn ends"
+        } else if let age = backgroundReportAge, age >= 60 {
+            out += " · reported \(Format.duration(age)) ago"
+        }
+        return out
     }
 
     /// Whether to show separate foreground / background lines in the dashboard.
     public var showsDimensions: Bool {
         guard !unobserved, !ended else { return false }
         return activity == .background || activity == .scheduled
-            || (state == .working && record.activeBackground?.isEmpty == false)
+            || ((state == .working || state == .waiting) && record.activeBackground?.isEmpty == false)
+    }
+
+    /// Multi-line explanation for the row's tooltip: what is known, from which evidence.
+    public func evidenceSummary(now: Double) -> String {
+        if unobserved {
+            return "Claude Code process running, no hook event received yet.\nIts state appears with its next prompt, tool call or turn end."
+        }
+        var lines: [String] = []
+        lines.append("Foreground: \(foregroundSummary)")
+        lines.append("Background: \(backgroundSummary)")
+        lines.append("Last event: \(record.lastEventName.isEmpty ? "none" : record.lastEventName), \(Format.ago(silence))")
+        let conf: String
+        switch confidence {
+        case .confirmed: conf = "confirmed by hook events"
+        case .partial: conf = "partial"
+        case .unknown: conf = "unknown"
+        }
+        lines.append("Confidence: \(conf)\(confidenceNote.isEmpty ? "" : " — " + confidenceNote)")
+        if processExited { lines.append("Claude process: exited") }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -124,12 +194,18 @@ public enum Presentation {
         var e = EffectiveSession(record: r, state: r.state, detail: baseDetail(r), ended: r.ended)
         e.dismissed = r.dismissed == true
         e.backgroundActive = r.activeBackground?.count
+        e.silence = max(0, now - max(r.lastEventAt, lastWake ?? 0))
+        e.backgroundReportAge = r.backgroundReportedAt.map { max(0, now - $0) }
+        if let t = r.turnStartedAt, let rep = r.backgroundReportedAt, r.state == .working || r.state == .waiting {
+            e.backgroundReportPredatesTurn = rep < t && r.activeBackground?.isEmpty == false
+        }
+        if let sc = r.schedules, sc.oneShot > 0 { e.wakeupDueAt = sc.nextOneShotAt }
         if r.ended {
             e.state = .idle
             e.detail = "Session ended"
             return e
         }
-        derive(&e, now: now, lastWake: lastWake, policy: policy)
+        derive(&e, now: now, policy: policy)
         if alive == false {
             e.processExited = true
             let foregroundFinished = r.state == .complete || r.state == .error || r.state == .idle
@@ -142,6 +218,7 @@ public enum Presentation {
             } else {
                 e.state = .unknown
                 e.confidence = .unknown
+                e.confidenceNote = "the Claude process exited without a SessionEnd event"
                 e.detail = backgroundPending
                     ? "Claude process exited while background work was reported running"
                     : "Claude process exited without ending the session"
@@ -150,44 +227,82 @@ public enum Presentation {
         return e
     }
 
+    static func lower(_ e: inout EffectiveSession, to c: Confidence, _ note: String) {
+        let rank: (Confidence) -> Int = { $0 == .confirmed ? 0 : ($0 == .partial ? 1 : 2) }
+        let cur = rank(e.confidence), new = rank(c)
+        if new > cur {
+            e.confidence = c
+            e.confidenceNote = note
+        } else if new == cur, new > 0, !note.isEmpty {
+            e.confidenceNote += (e.confidenceNote.isEmpty ? "" : "; ") + note
+        }
+    }
+
     /// Combine the foreground turn with background work and staleness.
-    static func derive(_ e: inout EffectiveSession, now: Double, lastWake: Double?, policy: PresentationPolicy) {
+    static func derive(_ e: inout EffectiveSession, now: Double, policy: PresentationPolicy) {
         let r = e.record
-        let silence = now - max(r.lastEventAt, lastWake ?? 0)
+        let silence = e.silence
         let bg = r.activeBackground
         let wakeups = r.schedules?.oneShot ?? 0
-        if r.observedMidSession || r.reason == .observedMidTurn { e.confidence = .partial }
+        if r.observedMidSession || r.reason == .observedMidTurn {
+            lower(&e, to: .partial, r.reason == .observedMidTurn ? "turn observed after it started" : "session observed after it started")
+        }
+        func backgroundDetail(_ bg: [BackgroundTaskInfo]) -> String {
+            var d = "\(bg.count) background task\(bg.count == 1 ? "" : "s") (\(typeSummary(bg)))"
+            if let age = e.backgroundReportAge, age >= 60 { d += " · reported \(Format.duration(age)) ago" } else { d += " running" }
+            if let act = r.backgroundActivityAt, act > (r.backgroundReportedAt ?? 0), now - act < 120 {
+                d += " · subagent active"
+            }
+            return d
+        }
+        func ageBackground() {
+            if let age = e.backgroundReportAge, age > policy.backgroundReportAgingSeconds,
+               (r.backgroundActivityAt ?? 0) < now - policy.backgroundReportAgingSeconds {
+                lower(&e, to: .partial, "background tasks last reported \(Format.duration(age)) ago; Claude Code reports them only when a turn ends")
+            }
+        }
         switch r.state {
         case .working:
             e.activity = .foreground
-            let limit = r.inFlightTools.isEmpty ? policy.staleAfterNoToolSeconds : policy.staleAfterToolSeconds
+            let tool = !r.inFlightTools.isEmpty
+            let names = r.inFlightTools.compactMap { r.inFlightToolNames?[$0] }
+            let bashOnly = tool && names.count == r.inFlightTools.count && names.allSatisfy { $0 == "Bash" }
+            let quiet = bashOnly ? policy.quietAfterBashSeconds : (tool ? policy.quietAfterToolSeconds : policy.quietAfterNoToolSeconds)
+            let limit = bashOnly ? policy.staleAfterBashSeconds : (tool ? policy.staleAfterToolSeconds : policy.staleAfterNoToolSeconds)
             if silence > limit {
                 e.state = .unknown
                 e.activity = .none
                 e.stale = true
-                e.confidence = .unknown
-                e.detail = "No activity for \(Format.duration(silence)) (possibly interrupted)"
+                lower(&e, to: .unknown, "no hook event for \(Format.duration(silence)); Claude Code reports no event when a turn is stopped or interrupted with Esc")
+                e.detail = "No activity for \(Format.duration(silence)) · possibly stopped (not reported by Claude Code)"
+            } else if silence > quiet {
+                lower(&e, to: .partial, "no hook event for \(Format.duration(silence))" + (bashOnly ? ", longer than a Bash call's default maximum" : ""))
+                e.detail += " · no event for \(Format.duration(silence))"
             }
+            if e.backgroundReportPredatesTurn { lower(&e, to: .partial, "background count is from before this turn") }
         case .complete:
             if let bg, !bg.isEmpty {
                 e.state = .working
                 e.activity = .background
-                e.detail = "\(bg.count) background task\(bg.count == 1 ? "" : "s") running (\(typeSummary(bg)))"
+                e.detail = backgroundDetail(bg)
+                ageBackground()
             } else if wakeups > 0 {
                 e.state = .working
                 e.activity = .scheduled
-                e.detail = "Claude will continue at a scheduled wakeup"
+                if let due = r.schedules?.nextOneShotAt {
+                    if now - due > policy.wakeupOverdueSeconds && silence > policy.wakeupOverdueSeconds {
+                        e.detail = "Scheduled wakeup was due at \(Format.timeOfDay(due)) · not yet observed"
+                        lower(&e, to: .partial, "the wakeup is overdue; Claude Code may have skipped or cancelled it")
+                    } else {
+                        e.detail = "Claude continues at \(Format.timeOfDay(due)) (scheduled wakeup)"
+                    }
+                } else {
+                    e.detail = "Claude will continue at a scheduled wakeup"
+                }
             } else if bg == nil {
                 e.state = .unknown
-                e.confidence = .unknown
+                lower(&e, to: .unknown, "Claude Code did not report background work at the end of the turn")
                 e.detail = "Response finished · background work not reported by Claude Code"
-            }
-            if e.activity == .background || e.activity == .scheduled, silence > policy.staleAfterBackgroundSeconds {
-                e.state = .unknown
-                e.activity = .none
-                e.stale = true
-                e.confidence = .unknown
-                e.detail = "Background work not confirmed for \(Format.duration(silence))"
             }
         case .waiting, .error:
             if let bg, !bg.isEmpty { e.detail += " · \(bg.count) background task\(bg.count == 1 ? "" : "s")" }
@@ -197,20 +312,24 @@ public enum Presentation {
             if let bg, !bg.isEmpty {
                 e.state = .working
                 e.activity = .background
-                e.confidence = .partial
-                e.detail = "\(bg.count) background task\(bg.count == 1 ? "" : "s") running (\(typeSummary(bg))) · foreground not yet observed"
-                if silence > policy.staleAfterBackgroundSeconds {
-                    e.state = .unknown
-                    e.activity = .none
-                    e.stale = true
-                    e.confidence = .unknown
-                    e.detail = "Background work not confirmed for \(Format.duration(silence))"
-                }
+                lower(&e, to: .partial, "foreground not yet observed")
+                e.detail = backgroundDetail(bg) + " · foreground not yet observed"
+                ageBackground()
+            } else if r.reason == .interrupted {
+                lower(&e, to: .unknown, "the turn ended without a Stop event (a stop or Esc is not reported)")
             } else {
-                e.confidence = .unknown
+                lower(&e, to: .unknown, "no foreground turn observed yet")
             }
         case .idle:
-            break
+            if let bg, !bg.isEmpty {
+                // E.g. interrupted turn while background tasks keep running.
+                e.state = .working
+                e.activity = .background
+                e.detail = backgroundDetail(bg) + (r.reason == .interrupted ? " · last turn interrupted" : "")
+                ageBackground()
+            } else if r.reason == .interrupted || r.reason == .idleInput {
+                lower(&e, to: .partial, "the turn ended without a Stop event")
+            }
         }
     }
 
@@ -228,7 +347,7 @@ public enum Presentation {
             var s: String
             switch r.reason {
             case .continued: s = "Continuing"
-            case .autoContinued: s = "Resumed automatically after background work"
+            case .autoContinued: s = "New turn while background work was pending (Claude continuing on its own, or a new prompt)"
             default: s = r.inFlightTools.isEmpty ? "Thinking" : "Running tool"
             }
             if r.activeSubagents > 0 { s += " · \(r.activeSubagents) subagent\(r.activeSubagents == 1 ? "" : "s")" }
@@ -240,7 +359,7 @@ public enum Presentation {
             case .question: return "Question for you"
             case .planApproval: return "Plan approval required"
             case .elicitation: return "Input requested"
-            case .idleInput: return "Waiting for input (turn ended without completion)"
+            case .idleInput: return "Waiting for input"
             default: return "Input required"
             }
         case .complete:
@@ -252,8 +371,16 @@ public enum Presentation {
             if r.reason == .interrupted { return "Interrupted" }
             return "API error: \(r.errorCategory ?? "unknown")"
         case .idle:
-            return r.reason == .resumed ? "Resumed · no prompt yet" : "Started · no prompt yet"
+            switch r.reason {
+            case .interrupted: return "Turn interrupted · ready for next prompt"
+            case .idleInput: return "Turn ended without a completion event · ready for next prompt"
+            case .resumed: return "Resumed · no prompt yet"
+            default: return "Started · no prompt yet"
+            }
         case .unknown:
+            if r.reason == .interrupted {
+                return "The turn may have been stopped · Claude Code reports no event for an interrupt"
+            }
             return "State not yet observed"
         }
     }
@@ -272,7 +399,7 @@ public enum Presentation {
                 guard let st = r.pidStartTime else { return true }
                 return abs(st - p.startTime) < 1.0
             }) { return false }
-            if let cwd = p.cwd, let i = pidless.firstIndex(where: { $0.cwd == cwd }) {
+            if let cwd = p.cwd, let i = pidless.firstIndex(where: { $0.cwd == cwd && p.startTime <= $0.lastEventAt + 1 }) {
                 pidless.remove(at: i)
                 return false
             }
@@ -327,10 +454,12 @@ public enum Presentation {
 
     public struct Counts: Equatable, Sendable {
         public var working = 0, waiting = 0, error = 0, complete = 0, unknown = 0, idle = 0
-        /// Subsets of `working` / `unknown`.
-        public var background = 0, unobserved = 0
+        /// Subsets of `working` / `unknown`. `background` includes `scheduled`.
+        public var background = 0, scheduled = 0, unobserved = 0
         public init() {}
         public var active: Int { working + waiting }
+        /// Sessions doing work now (foreground or background), excluding scheduled wakeups.
+        public var executing: Int { working - scheduled }
     }
 
     public static func counts(_ sessions: [EffectiveSession]) -> Counts {
@@ -340,6 +469,7 @@ public enum Presentation {
             case .working:
                 c.working += 1
                 if s.activity == .background || s.activity == .scheduled { c.background += 1 }
+                if s.activity == .scheduled { c.scheduled += 1 }
             case .waiting: c.waiting += 1
             case .error: c.error += 1
             case .complete: c.complete += 1
@@ -360,7 +490,8 @@ public enum Presentation {
         if c.error > 0 { parts.append("\(c.error) error") }
         let fg = c.working - c.background
         if fg > 0 { parts.append("\(fg) working") }
-        if c.background > 0 { parts.append("\(c.background) background") }
+        if c.background - c.scheduled > 0 { parts.append("\(c.background - c.scheduled) background") }
+        if c.scheduled > 0 { parts.append("\(c.scheduled) scheduled") }
         if c.unknown > 0 { parts.append("\(c.unknown) unknown") }
         if c.complete > 0 { parts.append("\(c.complete) complete") }
         if parts.isEmpty { return c.idle > 0 ? "\(c.idle) idle" : "No sessions detected" }
@@ -434,6 +565,14 @@ public enum Format {
         if s < 86400 { let m = (s % 3600) / 60; return m == 0 ? "\(s / 3600)h" : "\(s / 3600)h \(m)m" }
         let h = (s % 86400) / 3600
         return h == 0 ? "\(s / 86400)d" : "\(s / 86400)d \(h)h"
+    }
+
+    /// Local wall-clock time, e.g. "14:05".
+    public static func timeOfDay(_ t: Double) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: t))
     }
 
     public static func ago(_ secs: Double) -> String {

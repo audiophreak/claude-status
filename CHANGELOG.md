@@ -4,6 +4,69 @@ All notable changes are documented here. The format follows [Keep a Changelog](h
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-11-27
+
+Monitoring accuracy and operational hardening. Every rule is backed by a documented hook
+field or by event sequences recorded live from Claude Code Desktop 2.1.330 and CLI 2.1.325
+(sanitized fixtures in `Tests/Fixtures/recorded/`).
+
+### Fixed
+- **Desktop Stop button / interrupted turns.** Stopping a turn in the Desktop app fires no
+  `Stop` and no `PostToolUseFailure`; 1.0.x kept such a session *Working* (with a tool in
+  flight, for up to two hours). The internal prompt-suggestion agent's `SubagentStop` (empty
+  `agent_type`) that follows is now treated as evidence: **Unknown — Possibly interrupted**,
+  never Complete; any later event resumes the session.
+- **Questions shown as approvals.** `AskUserQuestion` / `ExitPlanMode` pass through
+  `PermissionRequest`; they now stay *Question for you* / *Plan approval required*.
+- **Waiting ended too early.** A parallel tool finishing, or background subagent activity,
+  ended *Waiting* while a permission prompt was still open. Requests are now tracked per tool
+  call and thread; Waiting ends when every open request is answered.
+- **Interrupts shown as errors.** A tool aborted with `is_interrupt` is now *Idle —
+  Interrupted* (gray), not *Error* (red). Red means a confirmed terminal failure.
+- **`idle_prompt` shown as Waiting.** At the input prompt without a `Stop`, the turn is shown
+  as ended (*Idle*), not as amber attention.
+- **Background subagent events reopened a finished or interrupted turn.** They are now
+  recorded as background evidence ("subagent active").
+- **Background work went Unknown after 8 hours.** The arbitrary cut-off is removed: while the
+  Claude process runs, reported background work stays *Working — Background* with its report
+  age; confidence drops after an hour; process exit resolves it.
+- **Sleep counted as silence in `claude-status-ctl`.** Staleness now uses the kernel wake time
+  (`kern.waketime`) in the CLI as well as in the app, and the app rescans processes on wake.
+- A record without a PID no longer absorbs a newer process in the same folder.
+- The 1.0.x CLI acceptance driver approved its own test session's permission prompts; it now
+  only declines them.
+
+### Added
+- **Background counts are labelled as last reported** ("1 task (shell) · reported 20m ago";
+  during a later turn "… at last report · updated when this turn ends"), because Claude Code
+  fires no event when an individual task exits.
+- **Continuation scheduled** (teal clock) with the wakeup time computed from the documented
+  `session_crons` cron expression ("Claude continues at 14:05"); overdue wakeups are flagged.
+  Scheduled sessions are not counted as executing work.
+- **Working — Continuing** for a new turn that starts while background work or a wakeup was
+  pending.
+- **Monitoring confidence** per session (confirmed / partial / unknown with the reason), a
+  "Partly observed" hint and an evidence tooltip (foreground, background, last event).
+- Health line "Hooks installed · last ran 12s ago · 0 rejected".
+- `claude-status-ctl report` — sanitized Markdown diagnostic report for GitHub issues (no
+  session ids, project names, paths or payload data; `--include-names` to opt in to names).
+- `claude-status-ctl version`, `claude-status-ctl list --json`; `selftest` now also checks
+  permission waiting, interrupt evidence and scheduled continuation (12 checks).
+- `scripts/rollback.sh` (switch to any release zip or app, checksum-verified, settings never
+  restored from a backup) and `scripts/upgrade-rollback-test.sh` (previous release → this
+  build → previous release → this build in an isolated HOME; also in CI).
+- `scripts/acceptance/soak.py` (30+ minute monitoring test with an app restart),
+  `scripts/perf.sh` (reproducible performance measurements), rewritten
+  `scripts/acceptance/cli_acceptance.py` (full CLI matrix; never approves a permission).
+- Storage bound: at most 200 records (oldest ended or exited first).
+- The hook log records notification types, interrupt flags, internal agents and wakeup times
+  (labels only).
+
+### Changed
+- Records gain optional fields (tool names in flight, open permission requests, background
+  activity time, next wakeup time). Schema and enum values are unchanged, so 1.0.x can read
+  1.1.0 records (tested by rollback).
+
 ## [1.0.2] — 2026-11-26
 
 ### Fixed

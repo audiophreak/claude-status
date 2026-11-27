@@ -1,0 +1,37 @@
+{
+ "client": "cli",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 5.15,
+   "event": "PreToolUse",
+   "tool_name": "AskUserQuestion",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 5.21,
+   "event": "PermissionRequest",
+   "tool_name": "AskUserQuestion"
+  },
+  {
+   "t": 11.25,
+   "event": "Notification",
+   "notification_type": "permission_prompt"
+  },
+  {
+   "t": 13.46,
+   "event": "PostToolUse",
+   "tool_name": "AskUserQuestion",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 15.35,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ]
+}

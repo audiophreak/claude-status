@@ -1,0 +1,25 @@
+{
+ "client": "cli",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 4.01,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 4.09,
+   "event": "PermissionRequest",
+   "tool_name": "Bash"
+  },
+  {
+   "t": 10.11,
+   "event": "Notification",
+   "notification_type": "permission_prompt"
+  }
+ ]
+}

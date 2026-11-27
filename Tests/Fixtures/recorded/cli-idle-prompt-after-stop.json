@@ -1,0 +1,28 @@
+{
+ "client": "cli",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 11.5,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  },
+  {
+   "t": 13.25,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [],
+   "session_crons": []
+  },
+  {
+   "t": 71.57,
+   "event": "Notification",
+   "notification_type": "idle_prompt"
+  }
+ ]
+}

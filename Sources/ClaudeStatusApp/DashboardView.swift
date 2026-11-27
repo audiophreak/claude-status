@@ -18,7 +18,7 @@ struct MenuBarLabel: View {
 
     private var labelText: String? {
         var parts: [String] = []
-        if showCount && model.counts.working > 0 { parts.append("\(model.counts.working)") }
+        if showCount && model.counts.executing > 0 { parts.append("\(model.counts.executing)") }
         if showElapsed, let e = model.elapsedMenuText { parts.append(e) }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
@@ -29,7 +29,8 @@ struct MenuBarLabel: View {
         if c.waiting > 0 { bits.append("\(c.waiting) waiting for you") }
         if c.error > 0 { bits.append("\(c.error) with errors") }
         if c.working - c.background > 0 { bits.append("\(c.working - c.background) working") }
-        if c.background > 0 { bits.append("\(c.background) working in the background") }
+        if c.background - c.scheduled > 0 { bits.append("\(c.background - c.scheduled) working in the background") }
+        if c.scheduled > 0 { bits.append("\(c.scheduled) with a continuation scheduled") }
         if c.unknown > 0 { bits.append("\(c.unknown) unknown") }
         return bits.joined(separator: ", ")
     }
@@ -117,6 +118,8 @@ struct DashboardView: View {
                 }
                 Text("\(h.coverageText) · \(h.backgroundVisibilityText)")
                     .font(.caption2).foregroundStyle(.secondary)
+                Text(h.hooksText(now: Date().timeIntervalSince1970))
+                    .font(.caption2).foregroundStyle(.secondary)
                 if model.integrationNeedsSetup {
                     Button("Set Up Claude Code Hooks…") { IntegrationUI.confirmSetup(model) }
                         .controlSize(.small)
@@ -171,11 +174,17 @@ struct SessionRow: View {
                     Text(Presentation.timeText(session, now: now))
                         .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
                 }
-                Text("\(session.label) — \(session.detail)")
+                // Background-only work is described by the foreground / background line below.
+                Text(session.showsDimensions && session.activity == .background ? session.label : "\(session.label) — \(session.detail)")
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
                 if session.showsDimensions {
-                    Text("Foreground: \(session.foregroundSummary) · Background: \(session.backgroundSummary.replacingOccurrences(of: " running", with: ""))")
+                    Text("Foreground: \(session.foregroundSummary) · Background: \(session.backgroundSummary)")
                         .font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(2)
+                }
+                if session.confidence != .confirmed && !session.unobserved {
+                    Label(session.confidence == .partial ? "Partly observed" : "State uncertain", systemImage: "questionmark.circle.dashed")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary).labelStyle(.titleAndIcon)
+                        .accessibilityLabel("Monitoring confidence: \(session.confidence.rawValue)")
                 }
                 if showDirectory, let cwd = session.record.cwd {
                     Text(abbreviate(cwd)).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
@@ -184,8 +193,7 @@ struct SessionRow: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 7)
         .accessibilityElement(children: .combine)
-        .help(session.unobserved ? "Claude process \(session.record.pid ?? 0) — not yet observed\n\(session.record.cwd ?? "")"
-              : "Session \(session.record.sessionId)\n\(session.record.cwd ?? "")")
+        .help(session.evidenceSummary(now: now) + (showDirectory ? "\n" + abbreviate(session.record.cwd ?? "") : ""))
     }
 
     private var title: String {

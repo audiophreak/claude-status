@@ -1,0 +1,255 @@
+{
+ "client": "cli",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 4.21,
+   "event": "PreToolUse",
+   "tool_name": "Agent",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 4.28,
+   "event": "SubagentStart",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose"
+  },
+  {
+   "t": 4.28,
+   "event": "PostToolUse",
+   "tool_name": "Agent",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 5.84,
+   "event": "Stop",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "subagent",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 9.64,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "subagent",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 12.39,
+   "event": "PreToolUse",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 12.45,
+   "event": "PostToolUse",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 17.69,
+   "event": "PreToolUse",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose",
+   "tool_name": "ToolSearch",
+   "tool_use_id": "toolu_03"
+  },
+  {
+   "t": 17.74,
+   "event": "PostToolUse",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose",
+   "tool_name": "ToolSearch",
+   "tool_use_id": "toolu_03"
+  },
+  {
+   "t": 22.31,
+   "event": "SubagentStop",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "subagent",
+     "status": "running"
+    },
+    {
+     "id": "bg-1",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 22.39,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 28.9,
+   "event": "Stop",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 31.26,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 37.49,
+   "event": "SubagentStart",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose"
+  },
+  {
+   "t": 40.48,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 40.72,
+   "event": "SubagentStop",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "subagent",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 44.33,
+   "event": "PreToolUse",
+   "tool_name": "Agent",
+   "tool_use_id": "toolu_04"
+  },
+  {
+   "t": 44.39,
+   "event": "PostToolUse",
+   "tool_name": "Agent",
+   "tool_use_id": "toolu_04"
+  },
+  {
+   "t": 44.39,
+   "event": "SubagentStart",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose"
+  },
+  {
+   "t": 44.67,
+   "event": "PreToolUse",
+   "tool_name": "Agent",
+   "tool_use_id": "toolu_05"
+  },
+  {
+   "t": 44.73,
+   "event": "PostToolUse",
+   "tool_name": "Agent",
+   "tool_use_id": "toolu_05"
+  },
+  {
+   "t": 44.73,
+   "event": "SubagentStart",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose"
+  },
+  {
+   "t": 44.85,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 46.55,
+   "event": "SubagentStop",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "subagent",
+     "status": "running"
+    },
+    {
+     "id": "bg-1",
+     "type": "subagent",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 47.01,
+   "event": "SubagentStop",
+   "agent_id": "agent-general-purpose",
+   "agent_type": "general-purpose",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "subagent",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 48.91,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  },
+  {
+   "t": 48.98,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 49.03,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 52.69,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 53.56,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ]
+}

@@ -49,7 +49,12 @@ public struct ScheduleCounts: Codable, Equatable, Sendable {
     public var oneShot: Int
     /// Recurring schedules: informational, they do not mean work is in progress.
     public var recurring: Int
-    public init(oneShot: Int = 0, recurring: Int = 0) { self.oneShot = oneShot; self.recurring = recurring }
+    /// Earliest time a one-shot wakeup will fire, computed from its cron expression when it
+    /// can be parsed (nil = no one-shot, or the expression was not understood).
+    public var nextOneShotAt: Double?
+    public init(oneShot: Int = 0, recurring: Int = 0, nextOneShotAt: Double? = nil) {
+        self.oneShot = oneShot; self.recurring = recurring; self.nextOneShotAt = nextOneShotAt
+    }
 }
 
 /// A validated, minimised lifecycle event. Contains only the fields Claude Status needs:
@@ -75,6 +80,11 @@ public struct HookEvent: Equatable, Sendable {
     /// Documented `session_crons` array (Stop, SubagentStop). nil = field absent.
     public var schedules: ScheduleCounts?
     public var promptId: String?
+    /// Subagent type label (`agent_type`); empty for Claude Code's internal agents.
+    public var agentType: String?
+    /// Documented: internal agents (prompt suggestions, `/btw`) fire SubagentStop with an
+    /// empty `agent_type`. Prompt suggestions run when a turn has ended.
+    public var isInternalAgent: Bool = false
 
     public var backgroundTaskCount: Int? { backgroundTasks?.count }
 
@@ -94,6 +104,8 @@ public struct HookEvent: Equatable, Sendable {
         self.schedules = schedules
         self.promptId = promptId
     }
+
+    func with(_ f: (inout HookEvent) -> Void) -> HookEvent { var c = self; f(&c); return c }
 
     /// True when the hook fired inside a subagent (documented `agent_id` field).
     public var isSubagent: Bool { agentId != nil }
@@ -184,8 +196,18 @@ public enum HookEventParser {
         var schedules: ScheduleCounts? = nil
         if let arr = d["session_crons"] as? [Any] {
             var c = ScheduleCounts()
+            let after = Date(timeIntervalSince1970: timestamp - 60)
             for case let entry as [String: Any] in arr.prefix(1000) {
-                if (entry["recurring"] as? Bool) == false { c.oneShot += 1 } else { c.recurring += 1 }
+                if (entry["recurring"] as? Bool) == false {
+                    c.oneShot += 1
+                    // Only the schedule expression is read, never the scheduled prompt.
+                    if c.oneShot <= 16, let expr = entry["schedule"] as? String,
+                       let t = CronSchedule(expr)?.next(after: after)?.timeIntervalSince1970 {
+                        c.nextOneShotAt = min(c.nextOneShotAt ?? t, t)
+                    }
+                } else {
+                    c.recurring += 1
+                }
             }
             schedules = c
         }
@@ -208,6 +230,11 @@ public enum HookEventParser {
             schedules: schedules,
             promptId: str("prompt_id")
         )
+        .with {
+            let at = d["agent_type"] as? String
+            $0.agentType = at.flatMap { Validate.label($0, maxLength: 64) ? $0 : nil }
+            $0.isInternalAgent = $0.agentId != nil && at != nil && at!.isEmpty
+        }
     }
 
     /// Maximum background tasks retained per session.

@@ -243,7 +243,7 @@ hook "$AH" '{"session_id":"bg-1","hook_event_name":"Stop","background_tasks":[{"
 check "Stop with a running background task -> Working — Background" wait_for "$(lbl bg-1)" "Working — Background" 3
 check "background work counts as working in the aggregate" wait_for "d['background'] >= 1" "True" 3
 hook "$AH" '{"session_id":"bg-1","hook_event_name":"UserPromptSubmit","prompt":"<task notification>"}'
-check "automatic continuation -> Working" wait_for "$(lbl bg-1)" "Working" 3
+check "automatic continuation (new turn while background work pending) -> Working — Continuing" wait_for "$(lbl bg-1)" "Working — Continuing" 3
 hook "$AH" '{"session_id":"bg-1","hook_event_name":"Stop","background_tasks":[],"session_crons":[]}'
 check "all work finished -> Complete" wait_for "$(lbl bg-1)" "Complete" 3
 hook "$AH" '{"session_id":"bg-2","hook_event_name":"Stop"}'

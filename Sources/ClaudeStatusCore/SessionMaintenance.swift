@@ -13,11 +13,33 @@ public enum SessionMaintenance {
     /// - Parameters:
     ///   - retention: nil = explicit "Clear Finished"; otherwise minimum age in seconds.
     ///   - alive: process liveness for a record (nil = unknown).
+    /// Upper bound on stored records. Beyond it, the oldest records that are not needed to
+    /// track ongoing or possibly ongoing work (ended, process exited) are deleted first.
+    public static let maxRecords = 200
+
     public static func cleanup(store: SessionStore, now: Double, retention: Double?, lastWake: Double? = nil,
+                               maxRecords: Int = SessionMaintenance.maxRecords,
                                alive: (SessionRecord) -> Bool?) -> Result {
         var result = Result()
         try? store.withLock(timeout: 0.5) {
             let (records, corrupt) = store.loadAll()
+            var deleted = Set<String>()
+            defer {
+                // Bound storage growth: drop the oldest finished records whose process is gone.
+                let remaining = records.filter { !deleted.contains($0.sessionId) }
+                if remaining.count > maxRecords {
+                    let candidates = remaining
+                        .filter { r in
+                            let a = alive(r)
+                            let e = Presentation.evaluate(r, now: now, alive: a, lastWake: lastWake)
+                            return e.ended || (a == false && !e.state.isActive)
+                        }
+                        .sorted { $0.lastEventAt < $1.lastEventAt }
+                    for r in candidates.prefix(remaining.count - maxRecords) {
+                        if (try? store.delete(r.sessionId)) != nil { result.deleted += 1 }
+                    }
+                }
+            }
             for r in records {
                 let a = alive(r)
                 let e = Presentation.evaluate(r, now: now, alive: a, lastWake: lastWake)
@@ -29,7 +51,7 @@ public enum SessionMaintenance {
                     d.dismissed = true
                     if (try? store.save(d)) != nil { result.dismissed += 1 }
                 case .delete:
-                    if (try? store.delete(r.sessionId)) != nil { result.deleted += 1 }
+                    if (try? store.delete(r.sessionId)) != nil { result.deleted += 1; deleted.insert(r.sessionId) }
                 }
             }
             if retention == nil { for c in corrupt { store.deleteCorrupt(c) } }

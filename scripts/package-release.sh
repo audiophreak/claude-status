@@ -43,6 +43,16 @@ $NOTES_SECTION
 4. Click the menu bar icon › **Set Up Claude Code Hooks…** to register the hooks (a backup of
    \`~/.claude/settings.json\` is saved first).
 
+## Upgrade or roll back
+
+- **From 1.0.x:** quit Claude Status, replace the app with this one, open it. It refreshes its
+  helpers; \`~/.claude/settings.json\` is not changed (same hook registration) and running
+  sessions stay visible.
+- **Roll back** to any earlier 1.x release (from a source checkout):
+  \`scripts/rollback.sh ClaudeStatus-<version>-macos-arm64.zip --sha256 <checksum>\`. Without a
+  checkout: quit, replace the app with the older one, open it and click **Set Up Claude Code
+  Hooks…**. Session history is kept in both directions.
+
 ## Verify the download
 
 \`\`\`bash

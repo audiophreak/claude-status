@@ -1,0 +1,71 @@
+{
+ "client": "desktop",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 1.78,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 1.81,
+   "event": "PostToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 2.29,
+   "event": "PreToolUse",
+   "tool_name": "ToolSearch",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 2.31,
+   "event": "PostToolUse",
+   "tool_name": "ToolSearch",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 3.95,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_03"
+  },
+  {
+   "t": 9.0,
+   "event": "PostToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_03"
+  },
+  {
+   "t": 10.53,
+   "event": "PreToolUse",
+   "tool_name": "TaskStop",
+   "tool_use_id": "toolu_04"
+  },
+  {
+   "t": 10.56,
+   "event": "PostToolUse",
+   "tool_name": "TaskStop",
+   "tool_use_id": "toolu_04"
+  },
+  {
+   "t": 15.56,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  },
+  {
+   "t": 17.29,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ]
+}

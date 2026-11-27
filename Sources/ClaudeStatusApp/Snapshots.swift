@@ -11,7 +11,8 @@ enum Snapshots {
     static func demoSessions(now: Double) -> [SessionRecord] {
         func r(_ id: String, _ name: String, _ state: SessionState, _ reason: StateReason? = nil, client: ClientType,
                started: Double? = nil, completed: Double? = nil, took: Double? = nil, wt: String? = nil,
-               tools: Int = 0, subagents: Int = 0, background: [BackgroundTaskInfo] = []) -> SessionRecord {
+               tools: Int = 0, subagents: Int = 0, background: [BackgroundTaskInfo] = [],
+               wakeupIn: Double? = nil) -> SessionRecord {
             var x = SessionRecord(sessionId: "demo-\(id)", timestamp: now - 3600)
             x.state = state; x.reason = reason; x.client = client; x.gitRepoName = name; x.worktreeName = wt
             x.cwd = "/Users/demo/Code/\(name)"
@@ -23,7 +24,7 @@ enum Snapshots {
             x.background = background
             x.backgroundTasks = background.count
             x.backgroundReportedAt = now - 300
-            x.schedules = ScheduleCounts()
+            x.schedules = wakeupIn.map { ScheduleCounts(oneShot: 1, recurring: 0, nextOneShotAt: now + $0) } ?? ScheduleCounts()
             x.observedMidSession = false
             if state == .error { x.errorCategory = "rate_limit"; x.lastEventAt = now - 95 }
             return x
@@ -37,6 +38,7 @@ enum Snapshots {
             r("3", "docs-site", .waiting, .permission, client: .desktop, started: now - 65),
             r("4", "data-pipeline", .error, .apiError, client: .cli),
             r("5", "ios-app", .working, client: .cli, started: now - 31, wt: "login-flow", subagents: 2),
+            r("7", "release-notes", .complete, client: .cli, completed: now - 140, took: 35, wakeupIn: 720),
         ]
     }
 
@@ -49,8 +51,9 @@ enum Snapshots {
             hookStatus: HookInstallStatus(kind: .installed, installedEvents: HookEventName.registered.map(\.rawValue),
                                           missingEvents: [], duplicateEvents: [], mismatchedCommand: false, detail: nil),
             hookExecutablePresent: true, storeAccessible: true, lastEventAt: now - 4, corruptRecords: 0,
-            unobservedClaudeProcesses: 1, problems: ["Monitoring incomplete: 1 of 7 running sessions not yet observed"])
-        h.runningClaudeProcesses = 7
+            unobservedClaudeProcesses: 1, problems: ["Monitoring incomplete: 1 of 8 running sessions not yet observed"])
+        h.runningClaudeProcesses = 8
+        h.hookLastRanAt = now - 4
         h.backgroundVisibility = .supported
         return h
     }
@@ -64,7 +67,7 @@ enum Snapshots {
             model.loadPreview(records: demoSessions(now: now), unobserved: demoUnobserved(now: now),
                               health: demoHealth(now: now), now: now)
 
-            capture(DashboardView(model: model).background(.regularMaterial), appearance: appearance,
+            capture(DashboardView(model: model, scrollable: false).background(.regularMaterial), appearance: appearance,
                     to: dir.appendingPathComponent("dashboard-\(suffix).png"))
             capture(PreferencesView(model: model), appearance: appearance,
                     to: dir.appendingPathComponent("preferences-\(suffix).png"))
@@ -80,14 +83,15 @@ enum Snapshots {
             (.error, "Error — a turn failed (1 other working)"),
             (.working, "Working — 2 sessions working"),
             (.working, "Working — Background: replied, background tasks still running"),
-            (.unknown, "Unknown — state cannot be established"),
+            (.working, "Continuation scheduled: Claude continues at a set time"),
+            (.unknown, "Unknown — state or coverage cannot be established"),
             (.complete, "Complete — ready for the next prompt"),
             (.idle, "Idle — no sessions running"),
         ]
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(cases.enumerated()), id: \.offset) { i, c in
                 HStack(spacing: 12) {
-                    MenuBarLabel(model: labelModel(c.0, background: i == 3, now: now))
+                    MenuBarLabel(model: labelModel(c.0, background: i == 3, scheduled: i == 4, now: now))
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .frame(width: 64, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
@@ -100,18 +104,19 @@ enum Snapshots {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    static func labelModel(_ state: SessionState, background: Bool = false, now: Double) -> AppModel {
+    static func labelModel(_ state: SessionState, background: Bool = false, scheduled: Bool = false, now: Double) -> AppModel {
         var recs: [SessionRecord] = []
         func add(_ s: SessionState, _ i: Int) {
             var x = SessionRecord(sessionId: "l\(i)", timestamp: now); x.state = s; x.background = []
             x.observedMidSession = false
             if background { x.state = .complete; x.background = [BackgroundTaskInfo(id: "b", type: "shell", status: "running")] }
+            if scheduled { x.state = .complete; x.schedules = ScheduleCounts(oneShot: 1, recurring: 0, nextOneShotAt: now + 600) }
             recs.append(x)
         }
         switch state {
         case .waiting: add(.waiting, 0); add(.working, 1); add(.working, 2)
         case .error: add(.error, 0); add(.working, 1)
-        case .working where background: add(.working, 0)
+        case .working where background || scheduled: add(.working, 0)
         case .working: add(.working, 0); add(.working, 1)
         case .idle: break
         default: add(state, 0)

@@ -18,6 +18,10 @@ commands:
   diagnose           Print monitoring health, coverage and process correlation (--json)
   selftest           Run the hook executable against an isolated temporary store and check
                      ingestion and state derivation (foreground, background, completion)
+  report             Sanitized diagnostic report for bug reports (Markdown; no session ids,
+                     project names, paths or payload data). --include-names adds project names.
+                     --output FILE writes it to a file (mode 0600) instead of stdout
+  version            Print the Claude Status version
   list               List tracked and detected-but-unobserved sessions
   clear-finished     Remove finished sessions (hidden while their process still runs)
   purge-state        --yes: delete session records and logs (keeps settings backups unless --include-backups)
@@ -230,17 +234,65 @@ case "diagnose":
     }
     exit(h.level == .error ? 2 : 0)
 
+case "version", "--version", "-v":
+    print("Claude Status \(ClaudeStatusVersion.current)")
+
+case "report":
+    let store = SessionStore(paths: paths)
+    let (records, corrupt) = store.loadAll()
+    let procs = ProcessInspector.detectSessions(now: now)
+    let h = MonitoringHealth.check(paths: paths, settingsURL: settingsURL, records: records, corrupt: corrupt.count, processes: procs)
+    let wake = SystemClock.lastWake()
+    var sessions = records.map { Presentation.evaluate($0, now: now, alive: SessionMaintenance.liveness($0), lastWake: wake) }
+    sessions += Presentation.unobservedSessions(Presentation.unobservedProcesses(procs, records: records), now: now)
+    var versions: [Int32: String] = [:]
+    for p in procs { versions[p.pid] = DiagnosticReport.clientVersion(fromExecutable: ProcessInspector.executablePath(p.pid)) }
+    var uts = utsname()
+    uname(&uts)
+    let machine = withUnsafePointer(to: &uts.machine) { $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) } }
+    var input = DiagnosticReport.Input(
+        version: ClaudeStatusVersion.current, osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+        architecture: machine, health: h, appRunning: !NSRunningApplicationList.running().isEmpty,
+        sessions: Presentation.sorted(sessions), processes: procs, processVersions: versions,
+        hookLogTail: DiagnosticReport.readTail(paths.hookLog), settingsFileName: settingsURL.lastPathComponent, now: now)
+    input.includeNames = flag("--include-names")
+    input.sensitive = [NSUserName(), NSHomeDirectory(), NSFullUserName()].filter { !$0.isEmpty }
+    let text = DiagnosticReport.render(input)
+    if let out = option("--output") {
+        do { try SessionStore.atomicWrite(Data(text.utf8), to: absURL(out), mode: 0o600) } catch { fail("\(error)") }
+        print("Wrote sanitized report to \(out). Review it before attaching it to an issue.")
+    } else {
+        print(text)
+    }
+
 case "selftest":
     exit(SelfTest.run(hook: URL(fileURLWithPath: hookPath)) ? 0 : 1)
 
 case "list":
     let (records, corrupt) = SessionStore(paths: paths).loadAll()
     var sessions = records.map { r in
-        Presentation.evaluate(r, now: now, alive: SessionMaintenance.liveness(r), lastWake: nil)
+        Presentation.evaluate(r, now: now, alive: SessionMaintenance.liveness(r), lastWake: SystemClock.lastWake())
     }
     let unobserved = Presentation.unobservedProcesses(ProcessInspector.detectSessions(now: now), records: records)
     sessions += Presentation.unobservedSessions(unobserved, now: now) { ProjectInfo.detect(from: $0) }
     sessions = Presentation.sorted(sessions)
+    if flag("--json") {
+        // Machine-readable, for acceptance tests: id prefixes and derived state only.
+        let rows: [[String: Any]] = sessions.map { s in
+            ["id": s.unobserved ? "pid-\(s.record.pid ?? 0)" : String(s.record.sessionId.prefix(8)),
+             "state": s.state.rawValue, "label": s.label, "activity": s.activity.rawValue,
+             "confidence": s.confidence.rawValue, "detail": s.detail, "client": s.record.client.rawValue,
+             "foreground": s.foregroundSummary, "background": s.backgroundSummary,
+             "backgroundActive": s.backgroundActive ?? NSNull(), "unobserved": s.unobserved, "dismissed": s.dismissed,
+             "ended": s.ended, "processExited": s.processExited, "pid": s.record.pid.map { Int($0) } ?? NSNull(),
+             "lastEvent": s.record.lastEventName, "silence": Int(s.silence)]
+        }
+        let agg = Presentation.aggregate(sessions)
+        let obj: [String: Any] = ["aggregate": agg.rawValue, "activity": Presentation.aggregateActivity(sessions).rawValue,
+                                  "summary": Presentation.summary(Presentation.counts(sessions)), "sessions": rows]
+        print(String(decoding: try! JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]), as: UTF8.self))
+        exit(0)
+    }
     if sessions.isEmpty { print("No sessions tracked or detected.") }
     for s in sessions {
         let wt = s.record.worktreeName.map { " [\($0)]" } ?? ""
@@ -255,7 +307,7 @@ case "list":
 
 case "clear-finished":
     let r = SessionMaintenance.cleanup(store: SessionStore(paths: paths), now: now, retention: nil,
-                                       alive: SessionMaintenance.liveness)
+                                       lastWake: SystemClock.lastWake(), alive: SessionMaintenance.liveness)
     print("Removed \(r.deleted) finished session record(s); hid \(r.dismissed) finished session(s) whose Claude process is still running.")
 
 case "purge-state":

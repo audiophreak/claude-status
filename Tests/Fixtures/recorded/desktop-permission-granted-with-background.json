@@ -1,0 +1,91 @@
+{
+ "client": "desktop",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 2.08,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 2.24,
+   "event": "PostToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 2.68,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 2.72,
+   "event": "PermissionRequest",
+   "tool_name": "Bash"
+  },
+  {
+   "t": 8.73,
+   "event": "Notification",
+   "notification_type": "permission_prompt"
+  },
+  {
+   "t": 100.49,
+   "event": "PostToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 100.57,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 104.96,
+   "event": "Stop",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 106.43,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 140.57,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 144.87,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  },
+  {
+   "t": 146.51,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ]
+}

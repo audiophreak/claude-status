@@ -1,0 +1,117 @@
+{
+ "client": "desktop",
+ "events": [
+  {
+   "t": 0.0,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 2.54,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 2.68,
+   "event": "PostToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_01"
+  },
+  {
+   "t": 2.71,
+   "event": "PreToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 2.73,
+   "event": "PostToolUse",
+   "tool_name": "Bash",
+   "tool_use_id": "toolu_02"
+  },
+  {
+   "t": 5.85,
+   "event": "Stop",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    },
+    {
+     "id": "bg-1",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 7.59,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    },
+    {
+     "id": "bg-1",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 22.82,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 26.85,
+   "event": "Stop",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 28.53,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [
+    {
+     "id": "bg-0",
+     "type": "shell",
+     "status": "running"
+    }
+   ],
+   "session_crons": []
+  },
+  {
+   "t": 42.82,
+   "event": "UserPromptSubmit"
+  },
+  {
+   "t": 47.45,
+   "event": "Stop",
+   "background_tasks": [],
+   "session_crons": []
+  },
+  {
+   "t": 49.13,
+   "event": "SubagentStop",
+   "agent_id": "agent-internal",
+   "agent_type": "",
+   "background_tasks": [],
+   "session_crons": []
+  }
+ ]
+}
